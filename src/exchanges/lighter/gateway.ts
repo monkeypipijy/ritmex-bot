@@ -33,7 +33,7 @@ import {
   IMMEDIATE_OR_CANCEL_EXPIRY_PLACEHOLDER,
   type LighterEnvironment,
 } from "./constants";
-import { decimalToScaled, scaledToDecimalString } from "./decimal";
+import { decimalToScaled, scaledToDecimalString, scaleQuantityWithMinimum } from "./decimal";
 import { lighterOrderToAster, toAccountSnapshot, toDepth, toKlines, toOrders, toTicker } from "./mappers";
 
 interface SimpleEvent<T> {
@@ -888,7 +888,7 @@ export class LighterGateway {
     }
     const side = params.side;
     const isAsk = side === "SELL" ? 1 : 0;
-    const baseAmount = decimalToScaled(params.quantity, this.sizeDecimals);
+    const baseAmount = scaleQuantityWithMinimum(params.quantity, this.sizeDecimals);
     const baseAmountScaledString = scaledToDecimalString(baseAmount, this.sizeDecimals);
     const clientOrderIndex = BigInt(Date.now() % Number.MAX_SAFE_INTEGER);
     let priceScaled = params.price != null ? decimalToScaled(params.price, this.priceDecimals) : null;
