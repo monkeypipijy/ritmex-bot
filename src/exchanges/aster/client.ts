@@ -19,6 +19,8 @@ import type {
   AsterSpotTrade,
   AsterSpotUserTrade,
   AsterTicker,
+  AsterFuturesExchangeInfo,
+  AsterFuturesSymbolInfo,
   CancelSpotOrderParams,
   CreateOrderParams,
   CreateSpotOrderParams,
@@ -28,6 +30,7 @@ import type {
   SpotOpenOrdersParams,
   SpotUserTradesParams,
 } from "../types";
+import { decimalsOf } from "../../utils/math";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -44,6 +47,7 @@ const KLINE_REFRESH_INTERVAL_MS = 60_000;
 const LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1000;
 const RECONNECT_DELAY_MS = 2000;
 const POSITION_SYNC_INTERVAL_MS = 5000;
+const EXCHANGE_INFO_CACHE_TTL_MS = 60 * 60 * 1000;
 
 function requireEnv(value: string | undefined, key: string): string {
   if (!value) {
@@ -777,6 +781,25 @@ export class AsterRestClient {
     return raw.map(toPositionFromRisk);
   }
 
+  async getExchangeInfo(): Promise<AsterFuturesExchangeInfo> {
+    const url = `${FUTURES_REST_BASE}/fapi/v1/exchangeInfo`;
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 获取交易规则失败 ${String(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${text}`);
+    }
+    try {
+      return JSON.parse(text) as AsterFuturesExchangeInfo;
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 无法解析交易规则响应: ${text.slice(0, 200)}`);
+    }
+  }
+
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
     // Sanitize and normalize params for Aster futures API. Paradex-specific flags
     // like reduceOnly/closePosition on STOP/TRAILING should not leak here.
@@ -1304,6 +1327,18 @@ export class AsterGateway {
   private readonly klineInitialFetches = new Map<string, Promise<void>>();
   private initialized = false;
   private initializing: Promise<void> | null = null;
+  private readonly precisionCache = new Map<
+    string,
+    {
+      priceTick: number;
+      qtyStep: number;
+      priceDecimals?: number;
+      sizeDecimals?: number;
+    }
+  >();
+  private exchangeInfo: AsterFuturesExchangeInfo | null = null;
+  private exchangeInfoFetchedAt = 0;
+  private exchangeInfoPromise: Promise<AsterFuturesExchangeInfo> | null = null;
 
   constructor(options: { apiKey?: string; apiSecret?: string } = {}) {
     this.rest = new AsterRestClient(options);
@@ -1550,10 +1585,40 @@ export class AsterGateway {
   }
 
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
-    const order = await this.rest.createOrder(params);
+    const normalized = await this.normalizeOrderParams(params);
+    const order = await this.rest.createOrder(normalized);
     mergeOrderSnapshot(this.openOrders, order);
     this.ordersEvent.emit(Array.from(this.openOrders.values()));
     return order;
+  }
+
+  async getPrecision(symbol: string): Promise<{
+    priceTick: number;
+    qtyStep: number;
+    priceDecimals?: number;
+    sizeDecimals?: number;
+  } | null> {
+    const upper = String(symbol).toUpperCase();
+    const cached = this.precisionCache.get(upper);
+    if (cached) return cached;
+    let exchangeInfo: AsterFuturesExchangeInfo;
+    try {
+      exchangeInfo = await this.loadExchangeInfo();
+    } catch (error) {
+      console.error("[AsterGateway] 获取交易规则失败", error);
+      return null;
+    }
+    const symbols = exchangeInfo?.symbols ?? [];
+    const match = symbols.find((item) => {
+      if (!item) return false;
+      const symbolName = typeof item.symbol === "string" ? item.symbol.toUpperCase() : "";
+      const pairName = typeof item.pair === "string" ? item.pair.toUpperCase() : "";
+      return symbolName === upper || pairName === upper;
+    });
+    if (!match) return null;
+    const precision = this.extractSymbolPrecision(match);
+    this.precisionCache.set(upper, precision);
+    return precision;
   }
 
   async cancelOrder(params: { symbol: string; orderId?: number; origClientOrderId?: string }): Promise<void> {
@@ -1576,5 +1641,148 @@ export class AsterGateway {
       }
     }
     this.ordersEvent.emit(Array.from(this.openOrders.values()));
+  }
+
+  private async normalizeOrderParams(params: CreateOrderParams): Promise<CreateOrderParams> {
+    const symbol = String(params.symbol).toUpperCase();
+    const precision = await this.getPrecision(symbol);
+    if (!precision) {
+      return { ...params, symbol };
+    }
+    const { priceTick, qtyStep, priceDecimals, sizeDecimals } = precision;
+    const normalized: CreateOrderParams = { ...params, symbol };
+    if (normalized.price !== undefined) {
+      normalized.price = this.quantizePrice(normalized.price, priceTick, priceDecimals);
+    }
+    if (normalized.stopPrice !== undefined) {
+      normalized.stopPrice = this.quantizePrice(normalized.stopPrice, priceTick, priceDecimals);
+    }
+    if (normalized.activationPrice !== undefined) {
+      normalized.activationPrice = this.quantizePrice(normalized.activationPrice, priceTick, priceDecimals);
+    }
+    if (normalized.quantity !== undefined) {
+      normalized.quantity = this.quantizeQuantity(Math.abs(normalized.quantity), qtyStep, sizeDecimals);
+    }
+    return normalized;
+  }
+
+  private async loadExchangeInfo(): Promise<AsterFuturesExchangeInfo> {
+    const now = Date.now();
+    if (this.exchangeInfo && now - this.exchangeInfoFetchedAt <= EXCHANGE_INFO_CACHE_TTL_MS) {
+      return this.exchangeInfo;
+    }
+    if (this.exchangeInfoPromise) {
+      return this.exchangeInfoPromise;
+    }
+    this.exchangeInfoPromise = this.rest
+      .getExchangeInfo()
+      .then((info) => {
+        this.exchangeInfo = info;
+        this.exchangeInfoFetchedAt = Date.now();
+        this.exchangeInfoPromise = null;
+        return info;
+      })
+      .catch((error) => {
+        this.exchangeInfoPromise = null;
+        throw error;
+      });
+    return this.exchangeInfoPromise;
+  }
+
+  private extractSymbolPrecision(symbolInfo: AsterFuturesSymbolInfo): {
+    priceTick: number;
+    qtyStep: number;
+    priceDecimals?: number;
+    sizeDecimals?: number;
+  } {
+    const filters = symbolInfo.filters ?? [];
+    const normalizeFilterType = (type: string) =>
+      filters.find((item) => typeof item.filterType === "string" && item.filterType.toUpperCase() === type);
+    const parseNumber = (value: unknown): number | undefined => {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string") {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+      return undefined;
+    };
+    const priceFilter = normalizeFilterType("PRICE_FILTER");
+    const lotFilter = normalizeFilterType("LOT_SIZE");
+    const marketLotFilter = normalizeFilterType("MARKET_LOT_SIZE");
+    const tickSize = parseNumber(priceFilter?.tickSize);
+    const stepSize = parseNumber(lotFilter?.stepSize ?? marketLotFilter?.stepSize);
+    const priceDecimals =
+      typeof symbolInfo.pricePrecision === "number" && Number.isFinite(symbolInfo.pricePrecision)
+        ? symbolInfo.pricePrecision
+        : typeof symbolInfo.quotePrecision === "number" && Number.isFinite(symbolInfo.quotePrecision)
+          ? symbolInfo.quotePrecision
+          : undefined;
+    const sizeDecimals =
+      typeof symbolInfo.quantityPrecision === "number" && Number.isFinite(symbolInfo.quantityPrecision)
+        ? symbolInfo.quantityPrecision
+        : typeof symbolInfo.baseAssetPrecision === "number" && Number.isFinite(symbolInfo.baseAssetPrecision)
+          ? symbolInfo.baseAssetPrecision
+          : undefined;
+    return {
+      priceTick: this.ensurePositivePrecision(tickSize, priceDecimals),
+      qtyStep: this.ensurePositivePrecision(stepSize, sizeDecimals),
+      priceDecimals,
+      sizeDecimals,
+    };
+  }
+
+  private ensurePositivePrecision(value: number | undefined, decimals?: number): number {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      const digits = Math.max(0, decimals ?? decimalsOf(value));
+      return Number(value.toFixed(digits));
+    }
+    if (typeof decimals === "number" && decimals >= 0) {
+      const fallback = Math.pow(10, -decimals);
+      const digits = Math.max(0, decimals);
+      return Number(fallback.toFixed(digits));
+    }
+    return 0;
+  }
+
+  private quantizePrice(value: number, tick: number, decimals?: number): number {
+    if (!Number.isFinite(value)) return value;
+    let result = value;
+    if (Number.isFinite(tick) && tick > 0) {
+      const ratio = value / tick;
+      const rounded = Math.round(ratio);
+      const quantized = rounded * tick;
+      const digits = Math.max(0, decimals ?? decimalsOf(tick));
+      result = Number(quantized.toFixed(digits));
+    } else if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(value.toFixed(decimals));
+    }
+    if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(result.toFixed(decimals));
+    }
+    return result;
+  }
+
+  private quantizeQuantity(value: number, step: number, decimals?: number): number {
+    if (!Number.isFinite(value)) return value;
+    const absValue = Math.abs(value);
+    let result = absValue;
+    if (Number.isFinite(step) && step > 0) {
+      const ratio = absValue / step;
+      const floored = Math.floor(ratio + 1e-12) * step;
+      const digits = Math.max(0, decimals ?? decimalsOf(step));
+      result = Number(floored.toFixed(digits));
+      if (result <= 0 && absValue > 0) {
+        const fallback = Number(step.toFixed(digits));
+        if (fallback > 0) {
+          result = fallback;
+        }
+      }
+    } else if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(absValue.toFixed(decimals));
+    }
+    if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(result.toFixed(decimals));
+    }
+    return result;
   }
 }
