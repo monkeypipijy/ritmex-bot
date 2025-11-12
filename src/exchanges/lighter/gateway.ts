@@ -120,6 +120,8 @@ const DEFAULT_TICKER_POLL_MS = 3000;
 const DEFAULT_KLINE_POLL_MS = 15000;
 const WS_HEARTBEAT_INTERVAL_MS = 5_000;
 const WS_STALE_TIMEOUT_MS = 20_000;
+const FEED_STALE_TIMEOUT_MS = 30_000;
+const STALE_CHECK_INTERVAL_MS = 5_000;
 const ACCOUNT_POLL_INTERVAL_MS = 5_000;
 const ACCOUNT_HTTP_EMPTY_CONFIRM_MS = 15_000;
 const POSITION_EPSILON = 1e-12;
@@ -207,6 +209,12 @@ export class LighterGateway {
 
   private readonly tickerPollMs: number;
   private readonly klinePollMs: number;
+  private lastDepthUpdateAt = Date.now();
+  private lastOrdersUpdateAt = Date.now();
+  private lastAccountUpdateAt = Date.now();
+  private lastTickerUpdateAt = Date.now();
+  private staleReason: string | null = null;
+  private staleMonitor: ReturnType<typeof setInterval> | null = null;
 
   // Track last applied order book sequence to drop stale WS messages
   private lastOrderBookOffset: number = 0;
@@ -252,6 +260,11 @@ export class LighterGateway {
     this.klinePollMs = options.klinePollMs ?? DEFAULT_KLINE_POLL_MS;
     this.l1Address = options.l1Address ?? null;
     this.logTxInfo = process.env.LIGHTER_LOG_TX === "1" || process.env.LIGHTER_LOG_TX === "true";
+    const now = Date.now();
+    this.lastDepthUpdateAt = now;
+    this.lastOrdersUpdateAt = now;
+    this.lastAccountUpdateAt = now;
+    this.lastTickerUpdateAt = now;
   }
 
   async ensureInitialized(): Promise<void> {
@@ -389,6 +402,7 @@ export class LighterGateway {
     // orders until there is activity.
     this.emitOrders();
     this.startPolling();
+    this.startStaleMonitor();
   }
 
   private async loadMetadata(): Promise<void> {
@@ -602,6 +616,19 @@ export class LighterGateway {
     }, 2000);
   }
 
+  private forceReconnect(reason: string): void {
+    if (this.staleReason) return;
+    this.staleReason = reason;
+    this.logger("ws:stale", reason);
+    try {
+      this.ws?.terminate();
+    } catch (error) {
+      this.logger("ws:terminate", error);
+    }
+    this.stopHeartbeat();
+    this.scheduleReconnect();
+  }
+
   private startHeartbeat(): void {
     if (this.heartbeatTimer) return;
     this.heartbeatTimer = setInterval(() => {
@@ -688,6 +715,7 @@ export class LighterGateway {
     this.lastOrderBookOffset = snapshot.offset ?? incomingOffset ?? this.lastOrderBookOffset;
     this.lastOrderBookTimestamp = incomingTs || Date.now();
     this.emitDepth();
+    this.markDepthUpdate();
   }
 
   private handleOrderBookUpdate(message: any): void {
@@ -714,6 +742,7 @@ export class LighterGateway {
     this.lastOrderBookOffset = Number(this.orderBook.offset ?? incomingOffset ?? this.lastOrderBookOffset);
     this.lastOrderBookTimestamp = incomingTs || Date.now();
     this.emitDepth();
+    this.markDepthUpdate();
   }
 
   private handleAccountAll(message: any): void {
@@ -916,7 +945,7 @@ export class LighterGateway {
     }
     const key = orderIndex ?? clientIndex;
     if (!key) return;
-    const status = (order.status ?? "").toLowerCase();
+    const status = String(order.status ?? "").toLowerCase();
     if (TERMINAL_ORDER_STATUSES.has(status)) {
       const existing = this.orderMap.get(key);
       this.orderMap.delete(key);
@@ -989,6 +1018,13 @@ export class LighterGateway {
     this.emitSyntheticTicker();
   }
 
+  private markDepthUpdate(): void {
+    this.lastDepthUpdateAt = Date.now();
+    if (this.staleReason && this.staleReason.startsWith("depth")) {
+      this.staleReason = null;
+    }
+  }
+
   private emitAccount(): void {
     if (!this.accountDetails) return;
     const snapshot = toAccountSnapshot(
@@ -999,11 +1035,19 @@ export class LighterGateway {
       { marketSymbol: this.marketSymbol, marketId: this.marketId }
     );
     this.accountEvent.emit(snapshot);
+    this.lastAccountUpdateAt = Date.now();
+    if (this.staleReason && this.staleReason.startsWith("account")) {
+      this.staleReason = null;
+    }
   }
 
   private emitOrders(): void {
     const mapped = toOrders(this.displaySymbol, this.orders ?? []);
     this.ordersEvent.emit(mapped);
+    this.lastOrdersUpdateAt = Date.now();
+    if (this.staleReason && this.staleReason.startsWith("orders")) {
+      this.staleReason = null;
+    }
   }
 
   private resolveOrderIndex(orderId: string): string {
@@ -1077,6 +1121,33 @@ export class LighterGateway {
     }
   }
 
+  private startStaleMonitor(): void {
+    if (this.staleMonitor) return;
+    this.staleMonitor = setInterval(() => this.checkFeedStaleness(), STALE_CHECK_INTERVAL_MS);
+  }
+
+  private stopStaleMonitor(): void {
+    if (!this.staleMonitor) return;
+    clearInterval(this.staleMonitor);
+    this.staleMonitor = null;
+  }
+
+  private checkFeedStaleness(): void {
+    if (this.staleReason) return;
+    const now = Date.now();
+    if (now - this.lastDepthUpdateAt > FEED_STALE_TIMEOUT_MS) {
+      this.forceReconnect("depth stale");
+      return;
+    }
+    if (now - this.lastOrdersUpdateAt > FEED_STALE_TIMEOUT_MS) {
+      this.forceReconnect("orders stale");
+      return;
+    }
+    if (now - this.lastAccountUpdateAt > FEED_STALE_TIMEOUT_MS * 2) {
+      this.forceReconnect("account stale");
+    }
+  }
+
   private async refreshTicker(): Promise<void> {
     try {
       const stats = await this.http.getExchangeStats();
@@ -1089,6 +1160,10 @@ export class LighterGateway {
       const ticker = toTicker(this.displaySymbol, match);
       this.tickerEvent.emit(ticker);
       this.loggedCreateOrderPayload = false;
+      this.lastTickerUpdateAt = Date.now();
+      if (this.staleReason && this.staleReason.startsWith("ticker")) {
+        this.staleReason = null;
+      }
     } catch (error) {
       this.logger("refreshTicker", error);
     }
