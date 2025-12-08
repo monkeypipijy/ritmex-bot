@@ -6,6 +6,7 @@ import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
 import { GridEngine, type GridEngineSnapshot } from "../strategy/grid-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
+import { t } from "../i18n";
 
 interface GridAppProps {
   onExit: () => void;
@@ -59,8 +60,8 @@ export function GridApp({ onExit }: GridAppProps) {
   if (error) {
     return (
       <Box flexDirection="column" padding={1}>
-        <Text color="red">启动失败: {error.message}</Text>
-        <Text color="gray">请检查环境变量和网络连通性。</Text>
+        <Text color="red">{t("common.startFailed", { message: error.message })}</Text>
+        <Text color="gray">{t("common.checkEnv")}</Text>
       </Box>
     );
   }
@@ -68,17 +69,17 @@ export function GridApp({ onExit }: GridAppProps) {
   if (!snapshot) {
     return (
       <Box padding={1}>
-        <Text>正在初始化网格策略…</Text>
+        <Text>{t("grid.initializing")}</Text>
       </Box>
     );
   }
 
   const feedStatus = snapshot.feedStatus;
   const feedEntries: Array<{ key: keyof typeof feedStatus; label: string }> = [
-    { key: "account", label: "账户" },
-    { key: "orders", label: "订单" },
-    { key: "depth", label: "深度" },
-    { key: "ticker", label: "行情" },
+    { key: "account", label: t("maker.feed.account") },
+    { key: "orders", label: t("maker.feed.orders") },
+    { key: "depth", label: t("maker.feed.depth") },
+    { key: "ticker", label: t("maker.feed.ticker") },
   ];
   const stopReason = snapshot.running ? null : snapshot.stopReason;
   const lastLogs = snapshot.tradeLog.slice(-5);
@@ -112,71 +113,112 @@ export function GridApp({ onExit }: GridAppProps) {
     price: order.price,
     amount: formatNumber(order.amount, 4),
   }));
+  const statusLabel = snapshot.running ? t("status.running") : t("status.paused");
+  const directionLabel =
+    snapshot.direction === "both"
+      ? t("grid.direction.both")
+      : snapshot.direction === "long"
+        ? t("grid.direction.long")
+        : t("grid.direction.short");
 
   return (
     <Box flexDirection="column" paddingX={1}>
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="cyanBright">Grid Strategy Dashboard</Text>
+        <Text color="cyanBright">{t("grid.title")}</Text>
         <Text>
-          交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 状态: {snapshot.running ? "运行中" : "暂停"} ｜ 方向: {snapshot.direction}
+          {t("grid.headerLine", {
+            exchange: exchangeName,
+            symbol: snapshot.symbol,
+            status: statusLabel,
+            direction: directionLabel,
+          })}
         </Text>
         <Text>
-          实时价格: {formatNumber(snapshot.lastPrice, 4)} ｜ 下界: {formatNumber(snapshot.lowerPrice, 4)} ｜ 上界: {formatNumber(snapshot.upperPrice, 4)} ｜ 网格数量: {snapshot.gridLines.length}
+          {t("grid.priceLine", {
+            lastPrice: formatNumber(snapshot.lastPrice, 4),
+            lower: formatNumber(snapshot.lowerPrice, 4),
+            upper: formatNumber(snapshot.upperPrice, 4),
+            count: snapshot.gridLines.length,
+          })}
         </Text>
-        <Text color="gray">数据状态:
+        <Text color="gray">
+          {t("grid.dataStatus")}
           {feedEntries.map((entry, index) => (
             <Text key={entry.key} color={feedStatus[entry.key] ? "green" : "red"}>
               {index === 0 ? " " : " "}
               {entry.label}
             </Text>
           ))}
-          ｜ 按 Esc 返回策略选择
+          {" | "}
+          {t("common.backHint")}
         </Text>
-        {stopReason ? <Text color="yellow">暂停原因: {stopReason}</Text> : null}
+        {stopReason ? <Text color="yellow">{t("grid.stopReason", { reason: stopReason })}</Text> : null}
       </Box>
 
       <Box flexDirection="row" marginBottom={1}>
         <Box flexDirection="column" marginRight={4}>
-          <Text color="greenBright">网格配置</Text>
+          <Text color="greenBright">{t("grid.configTitle")}</Text>
           <Text>
-            单笔数量: {formatNumber(gridConfig.orderSize, 6)} ｜ 最大仓位: {formatNumber(gridConfig.maxPositionSize, 6)}
+            {t("grid.configSize", {
+              orderSize: formatNumber(gridConfig.orderSize, 6),
+              maxPosition: formatNumber(gridConfig.maxPositionSize, 6),
+            })}
           </Text>
           <Text>
-            止损阈值: {(gridConfig.stopLossPct * 100).toFixed(2)}% ｜ 重启阈值: {(gridConfig.restartTriggerPct * 100).toFixed(2)}% ｜ 自动重启: {gridConfig.autoRestart ? "启用" : "关闭"}
+            {t("grid.configRisk", {
+              stopLoss: (gridConfig.stopLossPct * 100).toFixed(2),
+              restart: (gridConfig.restartTriggerPct * 100).toFixed(2),
+              autoRestart: gridConfig.autoRestart ? t("common.enabled") : t("common.disabled"),
+            })}
           </Text>
           <Text>
-            刷新间隔: {gridConfig.refreshIntervalMs} ms
+            {t("grid.refreshInterval", { interval: gridConfig.refreshIntervalMs })}
           </Text>
         </Box>
         <Box flexDirection="column">
-          <Text color="greenBright">持仓</Text>
+          <Text color="greenBright">{t("common.section.position")}</Text>
           {hasPosition ? (
             <>
               <Text>
-                当前持仓: {position.positionAmt > 0 ? "多" : "空"} ｜ 数量: {formatNumber(Math.abs(position.positionAmt), 6)} ｜ 均价: {formatNumber(position.entryPrice, 4)}
+                {t("grid.positionLine", {
+                  direction: position.positionAmt > 0 ? t("common.direction.long") : t("common.direction.short"),
+                  qty: formatNumber(Math.abs(position.positionAmt), 6),
+                  avgPrice: formatNumber(position.entryPrice, 4),
+                })}
               </Text>
               <Text>
-                未实现盈亏: {formatNumber(position.unrealizedProfit, 4)} ｜ 标记价: {formatNumber(position.markPrice, 4)}
+                {t("grid.unrealizedLine", {
+                  pnl: formatNumber(position.unrealizedProfit, 4),
+                  mark: formatNumber(position.markPrice, 4),
+                })}
               </Text>
             </>
           ) : (
-            <Text color="gray">当前无持仓</Text>
+            <Text color="gray">{t("common.noPosition")}</Text>
           )}
         </Box>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="yellow">网格线</Text>
-        {gridRows.length > 0 ? <DataTable columns={gridColumns} rows={gridRows} /> : <Text color="gray">暂无网格线</Text>}
+        <Text color="yellow">{t("grid.linesTitle")}</Text>
+        {gridRows.length > 0 ? (
+          <DataTable columns={gridColumns} rows={gridRows} />
+        ) : (
+          <Text color="gray">{t("grid.noLines")}</Text>
+        )}
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>
-        <Text color="yellow">目标挂单</Text>
-        {desiredRows.length > 0 ? <DataTable columns={desiredColumns} rows={desiredRows} /> : <Text color="gray">暂无目标挂单</Text>}
+        <Text color="yellow">{t("maker.targetOrders")}</Text>
+        {desiredRows.length > 0 ? (
+          <DataTable columns={desiredColumns} rows={desiredRows} />
+        ) : (
+          <Text color="gray">{t("maker.noTargetOrders")}</Text>
+        )}
       </Box>
 
       <Box flexDirection="column">
-        <Text color="yellow">最近事件</Text>
+        <Text color="yellow">{t("common.section.recent")}</Text>
         {lastLogs.length > 0 ? (
           lastLogs.map((item, index) => (
             <Text key={`${item.time}-${index}`}>
@@ -184,7 +226,7 @@ export function GridApp({ onExit }: GridAppProps) {
             </Text>
           ))
         ) : (
-          <Text color="gray">暂无日志</Text>
+          <Text color="gray">{t("common.noLogs")}</Text>
         )}
       </Box>
     </Box>

@@ -19,6 +19,7 @@ import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { extractMessage, isUnknownOrderError } from "../utils/errors";
 import { formatPriceToString } from "../utils/math";
 import { computePositionPnl } from "../utils/pnl";
+import { t } from "../i18n";
 
 export interface GuardianEngineSnapshot {
   ready: boolean;
@@ -108,8 +109,8 @@ export class GuardianEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
-        processFail: (error) => `账户推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.accountFail", { error: String(error) }),
+        processFail: (error) => t("log.process.accountError", { error: extractMessage(error) }),
       }
     );
 
@@ -135,8 +136,8 @@ export class GuardianEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
-        processFail: (error) => `订单推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.orderFail", { error: String(error) }),
+        processFail: (error) => t("log.process.orderError", { error: extractMessage(error) }),
       }
     );
 
@@ -148,8 +149,8 @@ export class GuardianEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
-        processFail: (error) => `价格推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.tickerFail", { error: String(error) }),
+        processFail: (error) => t("log.process.tickerError", { error: extractMessage(error) }),
       }
     );
   }
@@ -179,7 +180,7 @@ export class GuardianEngine {
       }
       await this.ensureProtection();
     } catch (error) {
-      this.tradeLog.push("error", `Guardian 执行异常: ${extractMessage(error)}`);
+      this.tradeLog.push("error", t("log.guardian.executeError", { error: extractMessage(error) }));
     } finally {
       this.processing = false;
       this.emitUpdate();
@@ -200,7 +201,7 @@ export class GuardianEngine {
     const hasEntryPrice = Number.isFinite(position.entryPrice) && Math.abs(position.entryPrice) > 1e-8;
     if (!hasEntryPrice) {
       if (!this.entryPricePendingLogged) {
-        this.tradeLog.push("info", "持仓均价尚未同步，等待交易所账户快照更新后再补挂止损");
+        this.tradeLog.push("info", t("log.guardian.entryPricePending"));
         this.entryPricePendingLogged = true;
       }
       return;
@@ -210,7 +211,7 @@ export class GuardianEngine {
     const price = this.getLastPrice();
     if (!Number.isFinite(price)) {
       if (!this.priceUnavailableLogged) {
-        this.tradeLog.push("info", "行情尚未就绪，等待最新价格以同步止损");
+        this.tradeLog.push("info", t("log.guardian.pricePending"));
         this.priceUnavailableLogged = true;
       }
       return;
@@ -406,7 +407,7 @@ export class GuardianEngine {
       this.lastStopAttempt.price = stopPrice;
       this.lastStopAttempt.at = now;
     } catch (err) {
-      this.tradeLog.push("error", `挂止损单失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.guardian.placeStopFail", { error: String(err) }));
       this.lastStopAttempt.side = side;
       this.lastStopAttempt.price = stopPrice;
       this.lastStopAttempt.at = now;
@@ -430,10 +431,10 @@ export class GuardianEngine {
       await this.exchange.cancelOrder({ symbol: this.config.symbol, orderId: currentOrder.orderId });
     } catch (err) {
       if (isUnknownOrderError(err)) {
-        this.tradeLog.push("order", "原止损单已不存在，跳过撤销");
+        this.tradeLog.push("order", t("log.guardian.stopMissingSkip"));
         this.openOrders = this.openOrders.filter((o) => o.orderId !== currentOrder.orderId);
       } else {
-        this.tradeLog.push("error", `取消原止损单失败: ${String(err)}`);
+        this.tradeLog.push("error", t("log.guardian.cancelStopFail", { error: String(err) }));
       }
     }
     try {
@@ -462,10 +463,15 @@ export class GuardianEngine {
         { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
       );
       if (order) {
-        this.tradeLog.push("stop", `移动止损到 ${formatPriceToString(nextStopPrice, this.resolvePriceDecimals())}`);
+        this.tradeLog.push(
+          "stop",
+          t("log.guardian.moveStop", {
+            price: formatPriceToString(nextStopPrice, this.resolvePriceDecimals()),
+          })
+        );
       }
     } catch (err) {
-      this.tradeLog.push("error", `移动止损失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.guardian.moveStopFail", { error: String(err) }));
       try {
         const position = getPosition(this.accountSnapshot, this.config.symbol);
         const quantity = Math.abs(position.positionAmt);
@@ -494,11 +500,13 @@ export class GuardianEngine {
         if (restored && Number.isFinite(existingStopPrice)) {
           this.tradeLog.push(
             "order",
-            `恢复原止损 @ ${formatPriceToString(existingStopPrice, this.resolvePriceDecimals())}`
+            t("log.guardian.restoreStop", {
+              price: formatPriceToString(existingStopPrice, this.resolvePriceDecimals()),
+            })
           );
         }
       } catch (recoverErr) {
-        this.tradeLog.push("error", `恢复原止损失败: ${String(recoverErr)}`);
+        this.tradeLog.push("error", t("log.guardian.restoreStopFail", { error: String(recoverErr) }));
       }
     }
   }
@@ -531,7 +539,7 @@ export class GuardianEngine {
         { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
       );
     } catch (err) {
-      this.tradeLog.push("error", `挂动态止盈失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.guardian.trailingFail", { error: String(err) }));
     }
   }
 
@@ -541,12 +549,12 @@ export class GuardianEngine {
     const orderIdList = protectiveOrders.map((order) => order.orderId);
     try {
       await this.exchange.cancelOrders({ symbol: this.config.symbol, orderIdList });
-      this.tradeLog.push("order", `清理遗留保护单: ${orderIdList.join(",")}`);
+      this.tradeLog.push("order", t("log.guardian.cleanupOrders", { ids: orderIdList.join(",") }));
     } catch (err) {
       if (isUnknownOrderError(err)) {
-        this.tradeLog.push("order", "保护单已不存在，跳过清理");
+        this.tradeLog.push("order", t("log.guardian.protectiveMissing"));
       } else {
-        this.tradeLog.push("error", `清理保护单失败: ${String(err)}`);
+        this.tradeLog.push("error", t("log.guardian.cleanupFail", { error: String(err) }));
       }
     }
   }
@@ -625,10 +633,10 @@ export class GuardianEngine {
     try {
       const snapshot = this.buildSnapshot();
       this.events.emit("update", snapshot, (error) => {
-        this.tradeLog.push("error", `更新分发异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.guardian.dispatchError", { error: String(error) }));
       });
     } catch (err) {
-      this.tradeLog.push("error", `构建快照失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.guardian.snapshotFail", { error: String(err) }));
     }
   }
 
@@ -668,12 +676,15 @@ export class GuardianEngine {
         if (updated) {
           this.tradeLog.push(
             "info",
-            `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
+            t("log.guardian.precisionSynced", {
+              priceTick: precision.priceTick,
+              qtyStep: precision.qtyStep,
+            })
           );
         }
       })
       .catch((error) => {
-        this.tradeLog.push("error", `同步精度失败: ${extractMessage(error)}`);
+        this.tradeLog.push("error", t("log.guardian.precisionFailed", { error: extractMessage(error) }));
         this.precisionSync = null;
         setTimeout(() => this.syncPrecision(), 2000);
       });

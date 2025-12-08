@@ -4,6 +4,7 @@ import type { AsterCredentials } from "./aster-adapter";
 import type { LighterCredentials } from "./lighter/adapter";
 import type { BackpackCredentials } from "./backpack/adapter";
 import type { ParadexCredentials } from "./paradex/adapter";
+import { t } from "../i18n";
 
 interface BuildAdapterOptions {
   symbol: string;
@@ -41,7 +42,7 @@ function resolveAsterCredentials(): AsterCredentials {
   const apiKey = process.env.ASTER_API_KEY;
   const apiSecret = process.env.ASTER_API_SECRET;
   if (!apiKey || !apiSecret) {
-    throw new Error("缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量");
+    throw new Error(t("env.missingAster"));
   }
   return { apiKey, apiSecret };
 }
@@ -50,11 +51,11 @@ function resolveLighterCredentials(symbol: string): LighterCredentials {
   const accountIndexRaw = process.env.LIGHTER_ACCOUNT_INDEX;
   const apiPrivateKey = process.env.LIGHTER_API_PRIVATE_KEY;
   if (!accountIndexRaw || !apiPrivateKey) {
-    throw new Error("缺少 LIGHTER_ACCOUNT_INDEX 或 LIGHTER_API_PRIVATE_KEY 环境变量");
+    throw new Error(t("env.missingLighter"));
   }
   const accountIndex = Number(accountIndexRaw);
   if (!Number.isInteger(accountIndex)) {
-    throw new Error("LIGHTER_ACCOUNT_INDEX 必须是整数");
+    throw new Error(t("env.lighterIndexInteger"));
   }
   const credentials: LighterCredentials = {
     displaySymbol: symbol,
@@ -76,7 +77,7 @@ function resolveBackpackCredentials(symbol: string): BackpackCredentials {
   const apiKey = process.env.BACKPACK_API_KEY;
   const apiSecret = process.env.BACKPACK_API_SECRET;
   if (!apiKey || !apiSecret) {
-    throw new Error("缺少 BACKPACK_API_KEY 或 BACKPACK_API_SECRET 环境变量");
+    throw new Error(t("env.missingBackpack"));
   }
   const credentials: BackpackCredentials = {
     apiKey,
@@ -94,13 +95,13 @@ function resolveParadexCredentials(): ParadexCredentials {
   const walletAddress = process.env.PARADEX_WALLET_ADDRESS;
 
   if (!privateKey || !walletAddress) {
-    throw new Error("Paradex 需要配置 PARADEX_PRIVATE_KEY 与 PARADEX_WALLET_ADDRESS");
+    throw new Error(t("env.missingParadex"));
   }
   if (!isHex32(privateKey)) {
-    throw new Error("PARADEX_PRIVATE_KEY 必须是 0x 开头的 32 字节十六进制字符串");
+    throw new Error(t("env.invalidParadexPrivateKey"));
   }
   if (!isHexAddress(walletAddress)) {
-    throw new Error("PARADEX_WALLET_ADDRESS 必须是有效的 0x 开头 40 字节十六进制地址");
+    throw new Error(t("env.invalidParadexAddress"));
   }
 
   const credentials: ParadexCredentials = {

@@ -27,6 +27,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import { t } from "../i18n";
 
 interface DesiredOrder {
   side: "BUY" | "SELL";
@@ -164,7 +165,7 @@ export class MakerEngine {
         const position = getPosition(snapshot, this.config.symbol);
         this.sessionVolume.update(position, this.getReferencePrice());
         if (!this.feedArrived.account) {
-          this.tradeLog.push("info", "账户快照已同步");
+          this.tradeLog.push("info", t("log.account.snapshotSynced"));
           this.feedArrived.account = true;
         }
         this.feedStatus.account = true;
@@ -172,8 +173,8 @@ export class MakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
-        processFail: (error) => `账户推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.accountFail", { error: String(error) }),
+        processFail: (error) => t("log.process.accountError", { error: String(error) }),
       }
     );
 
@@ -192,7 +193,7 @@ export class MakerEngine {
         }
         this.initialOrderSnapshotReady = true;
         if (!this.feedArrived.orders) {
-          this.tradeLog.push("info", "订单快照已返回");
+          this.tradeLog.push("info", t("log.order.snapshotReturned"));
           this.feedArrived.orders = true;
         }
         this.feedStatus.orders = true;
@@ -200,8 +201,8 @@ export class MakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
-        processFail: (error) => `订单推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.orderFail", { error: String(error) }),
+        processFail: (error) => t("log.process.orderError", { error: String(error) }),
       }
     );
 
@@ -210,7 +211,7 @@ export class MakerEngine {
       (depth) => {
         this.depthSnapshot = depth;
         if (!this.feedArrived.depth) {
-          this.tradeLog.push("info", "获得最新深度行情");
+          this.tradeLog.push("info", t("log.depth.ready"));
           this.feedArrived.depth = true;
         }
         this.feedStatus.depth = true;
@@ -218,8 +219,8 @@ export class MakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅深度失败: ${String(error)}`,
-        processFail: (error) => `深度推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.depthFail", { error: String(error) }),
+        processFail: (error) => t("log.process.depthError", { error: String(error) }),
       }
     );
 
@@ -228,7 +229,7 @@ export class MakerEngine {
       (ticker) => {
         this.tickerSnapshot = ticker;
         if (!this.feedArrived.ticker) {
-          this.tradeLog.push("info", "Ticker 已就绪");
+          this.tradeLog.push("info", t("log.ticker.ready"));
           this.feedArrived.ticker = true;
         }
         this.feedStatus.ticker = true;
@@ -236,8 +237,8 @@ export class MakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
-        processFail: (error) => `价格推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.tickerFail", { error: String(error) }),
+        processFail: (error) => t("log.process.tickerError", { error: String(error) }),
       }
     );
 
@@ -331,9 +332,9 @@ export class MakerEngine {
         hadRateLimit = true;
         this.rateLimit.registerRateLimit("maker");
         await this.enforceRateLimitStop();
-        this.tradeLog.push("warn", `MakerEngine 429: ${String(error)}`);
+        this.tradeLog.push("warn", t("log.maker.rateLimit429", { error: String(error) }));
       } else {
-        this.tradeLog.push("error", `做市循环异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.maker.loopError", { error: String(error) }));
       }
       this.emitUpdate();
     } finally {
@@ -367,18 +368,18 @@ export class MakerEngine {
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
       this.openOrders = [];
       this.emitUpdate();
-      this.tradeLog.push("order", "启动时清理历史挂单");
+      this.tradeLog.push("order", t("log.maker.cleanOrdersStart"));
       this.initialOrderResetDone = true;
       return true;
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "历史挂单已消失，跳过启动清理");
+        this.tradeLog.push("order", t("log.maker.cleanOrdersMissing"));
         this.initialOrderResetDone = true;
         this.openOrders = [];
         this.emitUpdate();
         return true;
       }
-      this.tradeLog.push("error", `启动撤单失败: ${String(error)}`);
+      this.tradeLog.push("error", t("log.maker.cleanOrdersFail", { error: String(error) }));
       return false;
     }
   }
@@ -401,16 +402,20 @@ export class MakerEngine {
         () => {
           this.tradeLog.push(
             "order",
-            `撤销不匹配订单 ${order.side} @ ${order.price} reduceOnly=${order.reduceOnly}`
+            t("log.maker.cancelMismatched", {
+              side: order.side,
+              price: order.price,
+              reduceOnly: order.reduceOnly,
+            })
           );
         },
         () => {
-          this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
+          this.tradeLog.push("order", t("log.maker.cancelMissing"));
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.maker.cancelFail", { error: String(error) }));
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
@@ -449,7 +454,11 @@ export class MakerEngine {
         }
         this.tradeLog.push(
           "error",
-          `挂单失败(${target.side} ${target.price}): ${extractMessage(error)}`
+          t("log.maker.placeFail", {
+            side: target.side,
+            price: target.price,
+            error: extractMessage(error),
+          })
         );
       }
     }
@@ -462,7 +471,7 @@ export class MakerEngine {
     const hasEntryPrice = Number.isFinite(position.entryPrice) && Math.abs(position.entryPrice) > 1e-8;
     if (!hasEntryPrice) {
       if (!this.entryPricePendingLogged) {
-        this.tradeLog.push("info", "做市持仓均价未同步，等待账户快照刷新后再执行止损判断");
+        this.tradeLog.push("info", t("log.maker.avgPending"));
         this.entryPricePendingLogged = true;
       }
       return;
@@ -478,7 +487,10 @@ export class MakerEngine {
       const closeSidePrice = closeSideIsSell ? bidPrice : askPrice;
       this.tradeLog.push(
         "stop",
-        `触发止损，方向=${position.positionAmt > 0 ? "多" : "空"} 当前亏损=${pnl.toFixed(4)} USDT`
+        t("log.maker.stopTriggered", {
+          direction: position.positionAmt > 0 ? t("common.direction.long") : t("common.direction.short"),
+          pnl: pnl.toFixed(4),
+        })
       );
       try {
         await this.flushOrders();
@@ -501,9 +513,9 @@ export class MakerEngine {
         );
       } catch (error) {
         if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "止损平仓时订单已不存在");
+          this.tradeLog.push("order", t("log.maker.stopOrderMissing"));
         } else {
-          this.tradeLog.push("error", `止损平仓失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.maker.stopCloseFail", { error: String(error) }));
         }
       }
     }
@@ -522,12 +534,12 @@ export class MakerEngine {
           // 成功撤销不记录日志，保持现有行为
         },
         () => {
-          this.tradeLog.push("order", "订单已不存在，撤销跳过");
+          this.tradeLog.push("order", t("log.maker.orderMissing"));
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.maker.cancelFail", { error: String(error) }));
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
@@ -559,12 +571,15 @@ export class MakerEngine {
         if (updated) {
           this.tradeLog.push(
             "info",
-            `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
+            t("log.common.precisionSynced", {
+              priceTick: precision.priceTick,
+              qtyStep: precision.qtyStep,
+            })
           );
         }
       })
       .catch((error) => {
-        this.tradeLog.push("error", `同步精度失败: ${extractMessage(error)}`);
+        this.tradeLog.push("error", t("log.common.precisionFailed", { error: extractMessage(error) }));
         this.precisionSync = null;
         setTimeout(() => this.syncPrecision(), 2000);
       });
@@ -581,10 +596,10 @@ export class MakerEngine {
     try {
       const snapshot = this.buildSnapshot();
       this.events.emit("update", snapshot, (error) => {
-        this.tradeLog.push("error", `更新回调处理异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.maker.updateHandlerError", { error: String(error) }));
       });
     } catch (err) {
-      this.tradeLog.push("error", `快照或更新分发异常: ${String(err)}`);
+      this.tradeLog.push("error", t("log.maker.snapshotDispatchError", { error: String(err) }));
     }
   }
 
@@ -619,19 +634,19 @@ export class MakerEngine {
 
   private logReadinessBlockers(): void {
     if (!this.feedStatus.account && !this.readinessLogged.account) {
-      this.tradeLog.push("info", "等待账户快照同步，尚未开始做市");
+      this.tradeLog.push("info", t("log.maker.waitAccount"));
       this.readinessLogged.account = true;
     }
     if (!this.feedStatus.depth && !this.readinessLogged.depth) {
-      this.tradeLog.push("info", "等待深度行情推送，尚未开始做市");
+      this.tradeLog.push("info", t("log.maker.waitDepth"));
       this.readinessLogged.depth = true;
     }
     if (!this.feedStatus.ticker && !this.readinessLogged.ticker) {
-      this.tradeLog.push("info", "等待Ticker推送，尚未开始做市");
+      this.tradeLog.push("info", t("log.maker.waitTicker"));
       this.readinessLogged.ticker = true;
     }
     if (!this.feedStatus.orders && !this.readinessLogged.orders) {
-      this.tradeLog.push("info", "等待订单快照返回，尚未执行初始化撤单");
+      this.tradeLog.push("info", t("log.maker.waitOrders"));
       this.readinessLogged.orders = true;
     }
   }
@@ -648,7 +663,7 @@ export class MakerEngine {
   private logDesiredOrders(desired: DesiredOrder[]): void {
     if (!desired.length) {
       if (this.lastDesiredSummary !== "none") {
-        this.tradeLog.push("info", "当前无目标挂单，等待下一次刷新");
+        this.tradeLog.push("info", t("log.maker.noTargets"));
         this.lastDesiredSummary = "none";
       }
       return;
@@ -657,7 +672,7 @@ export class MakerEngine {
       .map((order) => `${order.side}@${order.price}${order.reduceOnly ? "(RO)" : ""}`)
       .join(" | ");
     if (summary !== this.lastDesiredSummary) {
-      this.tradeLog.push("info", `目标挂单: ${summary}`);
+      this.tradeLog.push("info", t("log.maker.targetsSummary", { summary }));
       this.lastDesiredSummary = summary;
     }
   }
@@ -673,14 +688,14 @@ export class MakerEngine {
     this.insufficientBalanceCooldownUntil = now + INSUFFICIENT_BALANCE_COOLDOWN_MS;
     this.lastInsufficientMessage = detail;
     const seconds = Math.ceil(INSUFFICIENT_BALANCE_COOLDOWN_MS / 1000);
-    this.tradeLog.push("warn", `余额不足，暂停新挂单 ${seconds}s: ${detail}`);
+    this.tradeLog.push("warn", t("log.maker.balanceThrottle", { seconds, detail }));
     this.insufficientBalanceNotified = true;
   }
 
   private applyInsufficientBalanceState(now: number): boolean {
     const active = now < this.insufficientBalanceCooldownUntil;
     if (!active && this.insufficientBalanceNotified) {
-      this.tradeLog.push("info", "余额检测恢复，重新尝试挂单");
+      this.tradeLog.push("info", t("log.maker.balanceResumed"));
       this.insufficientBalanceNotified = false;
       this.lastInsufficientMessage = null;
     }

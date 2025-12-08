@@ -9,6 +9,7 @@ import { BasisApp } from "./BasisApp";
 import { isBasisStrategyEnabled } from "../config";
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from "../utils/copyright";
 import { resolveExchangeId } from "../exchanges/create-adapter";
+import { t } from "../i18n";
 
 interface StrategyOption {
   id: "trend" | "guardian" | "maker" | "offset-maker" | "basis" | "grid";
@@ -20,32 +21,32 @@ interface StrategyOption {
 const BASE_STRATEGIES: StrategyOption[] = [
   {
     id: "trend",
-    label: "趋势跟随策略 (SMA30)",
-    description: "监控均线信号，自动进出场并维护止损/止盈",
+    label: t("app.strategy.trend.label"),
+    description: t("app.strategy.trend.desc"),
     component: TrendApp,
   },
   {
     id: "guardian",
-    label: "Guardian 防守策略",
-    description: "不主动开仓，只为现有仓位补挂/移动止损，防止裸奔",
+    label: t("app.strategy.guardian.label"),
+    description: t("app.strategy.guardian.desc"),
     component: GuardianApp,
   },
   {
     id: "maker",
-    label: "做市刷单策略",
-    description: "双边挂单提供流动性，自动追价与风控止损",
+    label: t("app.strategy.maker.label"),
+    description: t("app.strategy.maker.desc"),
     component: MakerApp,
   },
   {
     id: "grid",
-    label: "基础网格策略",
-    description: "在上下边界之间布设等比网格，自动加仓与减仓",
+    label: t("app.strategy.grid.label"),
+    description: t("app.strategy.grid.desc"),
     component: GridApp,
   },
   {
     id: "offset-maker",
-    label: "偏移做市策略",
-    description: "根据盘口深度自动偏移挂单并在极端不平衡时撤退",
+    label: t("app.strategy.offset.label"),
+    description: t("app.strategy.offset.desc"),
     component: OffsetMakerApp,
   },
 ];
@@ -66,8 +67,8 @@ export function App() {
       ...BASE_STRATEGIES,
       {
         id: "basis" as const,
-        label: "期现套利策略",
-        description: "监控期货与现货盘口差价，辅助发现套利机会",
+        label: t("app.strategy.basis.label"),
+        description: t("app.strategy.basis.desc"),
         component: BasisApp,
       },
     ];
@@ -99,13 +100,13 @@ export function App() {
     <Box flexDirection="column" paddingX={1} paddingY={1}>
       <Text color="gray">{copyright.bannerText}</Text>
       {integrityOk ? null : (
-        <Text color="red">警告: 版权校验失败，当前版本可能被篡改。</Text>
+        <Text color="red">{t("app.integrity.warning")}</Text>
       )}
       <Box height={1}>
         <Text color="gray">────────────────────────────────────────────────────</Text>
       </Box>
-      <Text color="cyanBright">请选择要运行的策略</Text>
-      <Text color="gray">使用 ↑/↓ 选择，回车开始，Ctrl+C 退出。</Text>
+      <Text color="cyanBright">{t("app.pickStrategy")}</Text>
+      <Text color="gray">{t("app.pickHint")}</Text>
       <Box flexDirection="column" marginTop={1}>
         {strategies.map((strategy, index) => {
           const active = index === cursor;

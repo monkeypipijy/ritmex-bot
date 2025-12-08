@@ -5,6 +5,7 @@ import { AsterSpotRestClient, AsterRestClient } from "../exchanges/aster/client"
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { t } from "../i18n";
 
 export interface BasisArbSnapshot {
   ready: boolean;
@@ -159,8 +160,8 @@ export class BasisArbEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅期货深度失败: ${String(error)}`,
-        processFail: (error) => `处理期货深度异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.basis.subscribeFuturesDepthFail", { error: String(error) }),
+        processFail: (error) => t("log.basis.processFuturesDepthError", { error: String(error) }),
       }
     );
   }
@@ -179,7 +180,7 @@ export class BasisArbEngine {
     this.futures.updatedAt = depth.eventTime ?? depth.tradeTime ?? this.now();
     if (!this.feedReady.futures) {
       this.feedReady.futures = true;
-      this.tradeLog.push("info", `期货深度已就绪 (${this.config.futuresSymbol})`);
+      this.tradeLog.push("info", t("log.basis.futuresReady", { symbol: this.config.futuresSymbol }));
     }
     if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
       this.marketReadyAt = this.now();
@@ -197,7 +198,10 @@ export class BasisArbEngine {
       this.applySpotTicker(ticker);
     } catch (error) {
       this.feedReady.spot = false;
-      this.tradeLog.push("error", `获取现货盘口失败: ${String(error instanceof Error ? error.message : error)}`);
+      this.tradeLog.push(
+        "error",
+        t("log.basis.spotDepthError", { error: String(error instanceof Error ? error.message : error) })
+      );
     } finally {
       this.spotInFlight = false;
     }
@@ -217,13 +221,16 @@ export class BasisArbEngine {
         this.funding.updatedAt = typeof ts === "number" ? ts : this.now();
         if (!this.feedReady.funding) {
           this.feedReady.funding = true;
-          this.tradeLog.push("info", `资金费率已就绪 (${this.config.futuresSymbol})`);
+          this.tradeLog.push("info", t("log.basis.fundingReady", { symbol: this.config.futuresSymbol }));
         }
         this.emitUpdate();
       }
     } catch (error) {
       this.feedReady.funding = false;
-      this.tradeLog.push("error", `获取资金费率失败: ${String(error instanceof Error ? error.message : error)}`);
+      this.tradeLog.push(
+        "error",
+        t("log.basis.fundingError", { error: String(error instanceof Error ? error.message : error) })
+      );
     } finally {
       this.fundingInFlight = false;
     }
@@ -250,7 +257,10 @@ export class BasisArbEngine {
       this.spotBalances = next;
       this.emitUpdate();
     } catch (error) {
-      this.tradeLog.push("error", `获取现货余额失败: ${String(error instanceof Error ? error.message : error)}`);
+      this.tradeLog.push(
+        "error",
+        t("log.basis.spotBalanceError", { error: String(error instanceof Error ? error.message : error) })
+      );
     } finally {
       this.spotAccountInFlight = false;
     }
@@ -278,7 +288,10 @@ export class BasisArbEngine {
       this.futuresBalances = next;
       this.emitUpdate();
     } catch (error) {
-      this.tradeLog.push("error", `获取合约余额失败: ${String(error instanceof Error ? error.message : error)}`);
+      this.tradeLog.push(
+        "error",
+        t("log.basis.futuresBalanceError", { error: String(error instanceof Error ? error.message : error) })
+      );
     } finally {
       this.futuresAccountInFlight = false;
     }
@@ -295,7 +308,7 @@ export class BasisArbEngine {
     this.spot.updatedAt = ticker.time ?? this.now();
     if (!this.feedReady.spot) {
       this.feedReady.spot = true;
-      this.tradeLog.push("info", `现货盘口已就绪 (${this.config.spotSymbol})`);
+      this.tradeLog.push("info", t("log.basis.spotReady", { symbol: this.config.spotSymbol }));
     }
     if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
       this.marketReadyAt = this.now();
@@ -308,7 +321,7 @@ export class BasisArbEngine {
     const snapshot = this.buildSnapshot();
     this.evaluateSignals(snapshot);
     this.events.emit("update", snapshot, (error) => {
-      this.tradeLog.push("error", `推送订阅失败: ${String(error)}`);
+      this.tradeLog.push("error", t("log.basis.pushError", { error: String(error) }));
     });
   }
 
@@ -410,7 +423,7 @@ export class BasisArbEngine {
         this.lastEntrySignalAt = now;
         const bpTxt = (spreadBps as number).toFixed(2);
         const minutes = Math.floor(((msUntilFunding as number) / 60000));
-        this.tradeLog.push("entry", `入场机会: 扣费后价差 ${bpTxt} bp ｜ 距下次资金费约 ${minutes} 分钟`);
+        this.tradeLog.push("entry", t("log.basis.entryOpportunity", { bp: bpTxt, minutes }));
       }
     }
 
@@ -419,7 +432,7 @@ export class BasisArbEngine {
       if (now - this.lastExitSignalAt >= 60 * 1000) { // debounce 60s
         this.lastExitSignalAt = now;
         const minutes = Math.max(0, Math.floor(((msUntilFunding as number) / 60000)));
-        this.tradeLog.push("exit", `出场机会: 资金费率为负 ｜ 距收取约 ${minutes} 分钟`);
+        this.tradeLog.push("exit", t("log.basis.exitOpportunity", { minutes }));
       }
     }
   }

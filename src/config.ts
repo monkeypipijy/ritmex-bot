@@ -4,6 +4,7 @@
  */
 
 import { resolveExchangeId, type SupportedExchangeId } from "./exchanges/create-adapter";
+import { language, type Language } from "./i18n";
 
 export interface TradingConfig {
   symbol: string;
@@ -211,3 +212,5 @@ export function isBasisStrategyEnabled(): boolean {
   const normalized = raw.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
+
+export const uiLanguage: Language = language;
