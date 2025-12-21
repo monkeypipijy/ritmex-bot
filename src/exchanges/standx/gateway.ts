@@ -75,6 +75,8 @@ export interface StandxGatewayOptions {
   wsUrl?: string;
   sessionId?: string;
   signingKey?: string;
+  debugWs?: boolean;
+  debugWsRaw?: boolean;
   logger?: (context: string, error: unknown) => void;
 }
 
@@ -241,6 +243,94 @@ function normalizeDepthLevels(levels: [string, string][], side: "bid" | "ask"): 
   return sorted;
 }
 
+function decrossDepthBook(
+  bids: [string, string][],
+  asks: [string, string][]
+): { bids: [string, string][]; asks: [string, string][]; crossed: boolean; mode: "dropAsks" | "dropBids" | "none" } {
+  const bestBid = Number(bids[0]?.[0]);
+  const bestAsk = Number(asks[0]?.[0]);
+  if (!Number.isFinite(bestBid) || !Number.isFinite(bestAsk) || bestBid < bestAsk) {
+    return { bids, asks, crossed: false, mode: "none" };
+  }
+
+  const asksAboveBid = asks.filter(([price]) => Number(price) > bestBid);
+  if (asksAboveBid.length) {
+    return { bids, asks: asksAboveBid, crossed: true, mode: "dropAsks" };
+  }
+
+  const bidsBelowAsk = bids.filter(([price]) => Number(price) < bestAsk);
+  if (bidsBelowAsk.length) {
+    return { bids: bidsBelowAsk, asks, crossed: true, mode: "dropBids" };
+  }
+
+  return { bids, asks, crossed: true, mode: "none" };
+}
+
+function parseJsonPayloads(raw: unknown): any[] {
+  if (raw == null) return [];
+  if (typeof raw === "object" && !Buffer.isBuffer(raw) && !(raw instanceof ArrayBuffer)) {
+    return [raw];
+  }
+  let text: string;
+  if (typeof raw === "string") {
+    text = raw;
+  } else if (Buffer.isBuffer(raw)) {
+    text = raw.toString("utf-8");
+  } else if (raw instanceof ArrayBuffer) {
+    text = Buffer.from(raw).toString("utf-8");
+  } else {
+    text = String(raw);
+  }
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  try {
+    return [JSON.parse(trimmed)];
+  } catch {
+    // fall through to multi-payload parsing
+  }
+
+  const payloads: any[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const char = trimmed[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+    if (char === "}" || char === "]") {
+      depth = Math.max(0, depth - 1);
+      if (depth === 0 && start >= 0) {
+        const slice = trimmed.slice(start, i + 1);
+        try {
+          payloads.push(JSON.parse(slice));
+        } catch {
+          // ignore malformed chunk
+        }
+        start = -1;
+      }
+    }
+  }
+  return payloads;
+}
+
 export class StandxGateway {
   private readonly token: string;
   private readonly baseUrl: string;
@@ -248,6 +338,8 @@ export class StandxGateway {
   private readonly sessionId: string;
   private readonly logger: (context: string, error: unknown) => void;
   private readonly signer: StandxRequestSigner;
+  private readonly debugWs: boolean;
+  private readonly debugWsRaw: boolean;
   private signatureWarningLogged = false;
 
   private initialized = false;
@@ -271,6 +363,7 @@ export class StandxGateway {
   private marketWs: WebSocket | null = null;
   private marketWsReady = false;
   private marketWsAuthed = false;
+  private marketWsAuthRequested = false;
   private marketReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly subscriptions = new Set<string>();
 
@@ -290,6 +383,8 @@ export class StandxGateway {
     this.logger = options.logger ?? ((context, error) => console.error(`[StandxGateway] ${context}:`, error));
     const signingKey = options.signingKey ?? process.env.STANDX_REQUEST_PRIVATE_KEY;
     this.signer = new StandxRequestSigner(signingKey);
+    this.debugWs = toBooleanFlag(options.debugWs ?? process.env.STANDX_WS_DEBUG);
+    this.debugWsRaw = toBooleanFlag(options.debugWsRaw ?? process.env.STANDX_WS_DEBUG_RAW);
   }
 
   async ensureInitialized(symbol: string): Promise<void> {
@@ -643,16 +738,19 @@ export class StandxGateway {
     this.marketWs = new WebSocketCtor(this.wsUrl);
     this.marketWsReady = false;
     this.marketWsAuthed = false;
+    this.marketWsAuthRequested = false;
     const handleOpen = () => {
       this.marketWsReady = true;
       this.marketWsAuthed = false;
+      this.logDebug("ws open");
       this.sendAuthIfNeeded();
-      this.flushSubscriptions();
     };
     const handleClose = () => {
       this.marketWsReady = false;
       this.marketWsAuthed = false;
+      this.marketWsAuthRequested = false;
       this.marketWs = null;
+      this.logDebug("ws close");
       this.scheduleReconnect();
     };
     const handleError = (error: unknown) => {
@@ -687,19 +785,30 @@ export class StandxGateway {
   }
 
   private handleMarketMessage(event: { data: any }): void {
-    let message: any;
-    try {
-      message = JSON.parse(String(event.data));
-    } catch (error) {
-      this.logger("marketParse", error);
-      return;
+    this.logRawPayload(event.data);
+    const payloads = parseJsonPayloads(event.data);
+    if (payloads.length === 0) return;
+    for (const message of payloads) {
+      this.handleMarketPayload(message);
     }
+  }
+
+  private handleMarketPayload(message: any): void {
     const channel = message?.channel;
     if (!channel) return;
+    if (this.debugWs) {
+      const seq = message?.seq ?? message?.data?.seq;
+      const symbol = message?.symbol ?? message?.data?.symbol;
+      this.logDebug(`ws ${channel}`, { seq, symbol });
+    }
     if (channel === "auth") {
       const code = message?.data?.code;
-      if (code === 200) {
+      const msg = message?.data?.msg ?? message?.data?.message;
+      this.logDebug("ws auth", { code, msg });
+      if (code === 200 || code === 0) {
         this.marketWsAuthed = true;
+        this.marketWsAuthRequested = false;
+        this.flushSubscriptions();
       }
       return;
     }
@@ -709,11 +818,33 @@ export class StandxGateway {
       if (!rawSymbol) return;
       const bids = normalizeDepthLevels((data.bids ?? []).map(([price, qty]) => [String(price), String(qty)]), "bid");
       const asks = normalizeDepthLevels((data.asks ?? []).map(([price, qty]) => [String(price), String(qty)]), "ask");
+      const decrossed = decrossDepthBook(bids, asks);
+      const finalBids = decrossed.bids;
+      const finalAsks = decrossed.asks;
+      if (this.debugWs) {
+        const topBid = finalBids[0]?.[0];
+        const topAsk = finalAsks[0]?.[0];
+        const spread = topBid != null && topAsk != null ? Number(topAsk) - Number(topBid) : null;
+        const detail: Record<string, unknown> = {
+          topBid,
+          topAsk,
+          spread,
+          bidCount: finalBids.length,
+          askCount: finalAsks.length,
+          decrossed: decrossed.crossed,
+          mode: decrossed.mode,
+        };
+        if (this.debugWsRaw) {
+          detail.bidTop = finalBids.slice(0, 3);
+          detail.askTop = finalAsks.slice(0, 3);
+        }
+        this.logDebug("ws depth stats", detail);
+      }
       const depth: AsterDepth = {
         lastUpdateId: Number(message.seq ?? Date.now()),
-        bids,
-        asks,
-        eventTime: Date.now(),
+        bids: finalBids,
+        asks: finalAsks,
+        eventTime: toTimestamp(data.time),
         symbol: rawSymbol,
       };
       this.emitDepth(rawSymbol, depth);
@@ -768,36 +899,65 @@ export class StandxGateway {
     if (this.subscriptions.has(key)) return;
     this.subscriptions.add(key);
     if (!this.marketWsReady) return;
-    const payload = { streams: [stream] };
-    this.marketWs?.send(JSON.stringify(payload));
+    if (!this.marketWsAuthed) {
+      this.logDebug("ws subscribe queued", stream);
+      this.sendAuthIfNeeded();
+      return;
+    }
+    this.sendSubscribe(stream);
   }
 
   private sendAuthIfNeeded(): void {
-    if (!this.marketWsReady || this.marketWsAuthed) return;
-    const wantsUserData =
-      this.orderListeners.size > 0 || this.accountListeners.size > 0 || this.virtualStops.size > 0;
-    if (!wantsUserData) return;
-    const streams = [] as Array<{ channel: string }>;
-    if (this.orderListeners.size > 0) streams.push({ channel: "order" });
-    if (this.accountListeners.size > 0) {
-      streams.push({ channel: "position" });
-      streams.push({ channel: "balance" });
-    }
+    if (!this.marketWsReady || this.marketWsAuthed || this.marketWsAuthRequested) return;
+    this.marketWsAuthRequested = true;
+    this.logDebug("ws auth send");
     const payload = {
       auth: {
         token: this.token,
-        ...(streams.length ? { streams } : {}),
       },
     };
     this.marketWs?.send(JSON.stringify(payload));
   }
 
   private flushSubscriptions(): void {
+    if (!this.marketWsAuthed) return;
     for (const entry of this.subscriptions) {
       const [channel, symbol] = entry.split(":");
-      const payload = { streams: [{ channel, ...(symbol ? { symbol } : {}) }] };
-      this.marketWs?.send(JSON.stringify(payload));
+      this.sendSubscribe({ channel, ...(symbol ? { symbol } : {}) });
     }
+  }
+
+  private sendSubscribe(stream: { channel: string; symbol?: string }): void {
+    this.logDebug("ws subscribe send", stream);
+    this.marketWs?.send(JSON.stringify({ subscribe: stream }));
+  }
+
+  private logDebug(context: string, detail?: unknown): void {
+    if (!this.debugWs) return;
+    if (detail === undefined) {
+      console.log(`[StandxGateway] ${context}`);
+    } else {
+      console.log(`[StandxGateway] ${context}`, detail);
+    }
+  }
+
+  private logRawPayload(raw: unknown): void {
+    if (!this.debugWsRaw) return;
+    let text = "";
+    if (typeof raw === "string") {
+      text = raw;
+    } else if (Buffer.isBuffer(raw)) {
+      text = raw.toString("utf-8");
+    } else if (raw instanceof ArrayBuffer) {
+      text = Buffer.from(raw).toString("utf-8");
+    } else {
+      text = String(raw);
+    }
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const limit = 2000;
+    const output = trimmed.length > limit ? `${trimmed.slice(0, limit)}…(truncated)` : trimmed;
+    console.log(`[StandxGateway] ws raw`, output);
   }
 
   private emitDepth(symbol: string, depth: AsterDepth): void {
