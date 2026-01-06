@@ -3,6 +3,7 @@ import { Box, Text, useInput } from "ink";
 import { TrendApp } from "./TrendApp";
 import { GuardianApp } from "./GuardianApp";
 import { MakerApp } from "./MakerApp";
+import { MakerPointsApp } from "./MakerPointsApp";
 import { OffsetMakerApp } from "./OffsetMakerApp";
 import { GridApp } from "./GridApp";
 import { BasisApp } from "./BasisApp";
@@ -12,7 +13,7 @@ import { resolveExchangeId } from "../exchanges/create-adapter";
 import { t } from "../i18n";
 
 interface StrategyOption {
-  id: "trend" | "guardian" | "maker" | "offset-maker" | "basis" | "grid";
+  id: "trend" | "guardian" | "maker" | "maker-points" | "offset-maker" | "basis" | "grid";
   label: string;
   description: string;
   component: React.ComponentType<{ onExit: () => void }>;
@@ -60,19 +61,25 @@ export function App() {
   const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
   const exchangeId = useMemo(() => resolveExchangeId(), []);
   const strategies = useMemo(() => {
-    if (!isBasisStrategyEnabled()) {
-      return BASE_STRATEGIES;
+    const next: StrategyOption[] = [...BASE_STRATEGIES];
+    if (exchangeId === "standx") {
+      next.splice(3, 0, {
+        id: "maker-points" as const,
+        label: t("app.strategy.makerPoints.label"),
+        description: t("app.strategy.makerPoints.desc"),
+        component: MakerPointsApp,
+      });
     }
-    return [
-      ...BASE_STRATEGIES,
-      {
+    if (isBasisStrategyEnabled()) {
+      next.push({
         id: "basis" as const,
         label: t("app.strategy.basis.label"),
         description: t("app.strategy.basis.desc"),
         component: BasisApp,
-      },
-    ];
-  }, []);
+      });
+    }
+    return next;
+  }, [exchangeId]);
 
   useInput(
     (input, key) => {

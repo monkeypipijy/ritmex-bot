@@ -35,6 +35,11 @@ const translations: Record<string, TranslationEntry> = {
     zh: "双边挂单提供流动性，自动追价与风控止损",
     en: "Places two-sided quotes, auto-chases and risk-manages stops.",
   },
+  "app.strategy.makerPoints.label": { zh: "StandX 积分做市策略", en: "StandX Maker Points" },
+  "app.strategy.makerPoints.desc": {
+    zh: "基于标记价/盘口挂单赚取 StandX Maker Points",
+    en: "Quotes by mark-price bands to farm StandX maker points.",
+  },
   "app.strategy.grid.label": { zh: "基础网格策略", en: "Grid Strategy" },
   "app.strategy.grid.desc": {
     zh: "在上下边界之间布设等比网格，自动加仓与减仓",
@@ -174,6 +179,23 @@ const translations: Record<string, TranslationEntry> = {
   },
   "maker.targetOrders": { zh: "目标挂单", en: "Target Orders" },
   "maker.noTargetOrders": { zh: "暂无目标挂单", en: "No target orders" },
+  "makerPoints.title": { zh: "Maker Points 策略仪表盘", en: "Maker Points Dashboard" },
+  "makerPoints.initializing": { zh: "正在初始化 Maker Points 策略…", en: "Initializing Maker Points strategy..." },
+  "makerPoints.headerLine": {
+    zh: "交易所: {exchange} ｜ 交易对: {symbol} ｜ 买一价: {bid} ｜ 卖一价: {ask} ｜ 点差: {spread}",
+    en: "Exchange: {exchange} | Symbol: {symbol} | Best Bid: {bid} | Best Ask: {ask} | Spread: {spread}",
+  },
+  "makerPoints.quoteLine": {
+    zh: "挂单模式: {mode} ｜ BUY {buy} ｜ SELL {sell}",
+    en: "Quote mode: {mode} | BUY {buy} | SELL {sell}",
+  },
+  "makerPoints.binanceLine": {
+    zh: "Binance 深度: 买10 {buy} ｜ 卖10 {sell} ｜ 状态: {status}",
+    en: "Binance depth: bid10 {buy} | ask10 {sell} | Status: {status}",
+  },
+  "makerPoints.mode.closeOnly": { zh: "平仓", en: "Close only" },
+  "makerPoints.mode.normal": { zh: "正常", en: "Normal" },
+  "makerPoints.feed.binance": { zh: "Binance", en: "Binance" },
   "offset.name": { zh: "偏移做市策略", en: "offset maker strategy" },
   "offset.title": { zh: "偏移做市策略仪表盘", en: "Offset Maker Strategy Dashboard" },
   "offset.initializing": { zh: "正在初始化偏移做市策略…", en: "Initializing offset maker strategy..." },

@@ -110,6 +110,41 @@ export const makerConfig: MakerConfig = {
   priceTick: parseNumber(process.env.MAKER_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
 };
 
+export interface MakerPointsConfig {
+  symbol: string;
+  perOrderAmount: number;
+  closeThreshold: number;
+  stopLossUsd: number;
+  refreshIntervalMs: number;
+  maxLogEntries: number;
+  maxCloseSlippagePct: number;
+  priceTick: number;
+  qtyStep: number;
+  enableBand0To10: boolean;
+  enableBand10To30: boolean;
+  enableBand30To100: boolean;
+  minRepriceBps: number;
+}
+
+export const makerPointsConfig: MakerPointsConfig = {
+  symbol: resolveSymbolFromEnv("standx"),
+  perOrderAmount: parseNumber(process.env.MAKER_POINTS_ORDER_AMOUNT, parseNumber(process.env.TRADE_AMOUNT, 0.001)),
+  closeThreshold: parseNumber(process.env.MAKER_POINTS_CLOSE_THRESHOLD, 0),
+  stopLossUsd: parseNumber(process.env.MAKER_POINTS_STOP_LOSS_USD, 0),
+  refreshIntervalMs: parseNumber(process.env.MAKER_POINTS_REFRESH_INTERVAL_MS, 500),
+  maxLogEntries: parseNumber(process.env.MAKER_POINTS_MAX_LOG_ENTRIES, 200),
+  maxCloseSlippagePct: parseNumber(
+    process.env.MAKER_POINTS_MAX_CLOSE_SLIPPAGE_PCT ?? process.env.MAX_CLOSE_SLIPPAGE_PCT,
+    0.05
+  ),
+  priceTick: parseNumber(process.env.MAKER_POINTS_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
+  qtyStep: parseNumber(process.env.MAKER_POINTS_QTY_STEP ?? process.env.QTY_STEP, 0.001),
+  enableBand0To10: parseBoolean(process.env.MAKER_POINTS_BAND_0_10, true),
+  enableBand10To30: parseBoolean(process.env.MAKER_POINTS_BAND_10_30, true),
+  enableBand30To100: parseBoolean(process.env.MAKER_POINTS_BAND_30_100, true),
+  minRepriceBps: parseNumber(process.env.MAKER_POINTS_MIN_REPRICE_BPS, 3),
+};
+
 export interface BasisArbConfig {
   futuresSymbol: string;
   spotSymbol: string;

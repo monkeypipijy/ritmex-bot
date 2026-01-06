@@ -1,9 +1,10 @@
-import { basisConfig, gridConfig, isBasisStrategyEnabled, makerConfig, tradingConfig } from "../config";
+import { basisConfig, gridConfig, isBasisStrategyEnabled, makerConfig, makerPointsConfig, tradingConfig } from "../config";
 import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
 import { MakerEngine, type MakerEngineSnapshot } from "../strategy/maker-engine";
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
+import { MakerPointsEngine, type MakerPointsSnapshot } from "../strategy/maker-points-engine";
 import { TrendEngine, type TrendEngineSnapshot } from "../strategy/trend-engine";
 import { GuardianEngine, type GuardianEngineSnapshot } from "../strategy/guardian-engine";
 import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-engine";
@@ -21,6 +22,7 @@ export const STRATEGY_LABELS: Record<StrategyId, string> = {
   trend: "Trend Following",
   guardian: "Guardian",
   maker: "Maker",
+  "maker-points": "Maker Points",
   "offset-maker": "Offset Maker",
   basis: "Basis Arbitrage",
   grid: "Grid",
@@ -68,6 +70,23 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
     await runEngine({
       engine,
       strategy: "maker",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
+  "maker-points": async (opts) => {
+    const exchangeId = resolveExchangeId();
+    if (exchangeId !== "standx") {
+      throw new Error("Maker Points strategy only supports the StandX exchange.");
+    }
+    const config = makerPointsConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new MakerPointsEngine(config, adapter);
+    await runEngine({
+      engine,
+      strategy: "maker-points",
       silent: opts.silent,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
@@ -135,6 +154,7 @@ async function runEngine<
     | TrendEngineSnapshot
     | GuardianEngineSnapshot
     | MakerEngineSnapshot
+    | MakerPointsSnapshot
     | OffsetMakerEngineSnapshot
     | BasisArbSnapshot
     | GridEngineSnapshot
