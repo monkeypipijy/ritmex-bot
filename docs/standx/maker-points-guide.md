@@ -82,7 +82,7 @@ https://standx.ritmex.one/
 ```
 Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.xxxxx...（很长一串）
 
-代理钱包私钥: 0x1234567890abcdef...（64位十六进制字符）
+代理钱包私钥: 1234567890abcdef...（64 位十六进制字符，一般不带 0x 前缀）
 ```
 
 > 🔴 **请把这两个值复制保存下来！**
@@ -130,8 +130,8 @@ EXCHANGE=standx
 # 把下面的 "你的TOKEN" 替换成你导出的 Token（很长一串以 eyJ 开头的）
 STANDX_TOKEN=你的TOKEN
 
-# 把下面的 "你的私钥" 替换成你导出的代理钱包私钥（0x 开头的）
-STANDX_REQUEST_PRIVATE_KEY=你的私钥
+# 把下面的 "你的私钥" 替换成页面中标注为 STANDX_REQUEST_PRIVATE_KEY 的那一段内容（站点导出的值本身一般不带 0x 前缀，按页面原样粘贴即可）
+STANDX_REQUEST_PRIVATE_KEY=你的 STANDX_REQUEST_PRIVATE_KEY
 
 # ===== 交易品种 =====
 STANDX_SYMBOL=BTC-USD
@@ -168,14 +168,14 @@ MAKER_POINTS_BAND_30_100=true
 
 假设你导出的信息是：
 - Token: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ`
-- 代理钱包私钥: `0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890`
+- 代理钱包私钥: `abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890`（页面导出的值本身不带 `0x`）
 
 那么你的 `.env` 应该这样写：
 
 ```bash
 EXCHANGE=standx
 STANDX_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ
-STANDX_REQUEST_PRIVATE_KEY=0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+STANDX_REQUEST_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
 STANDX_SYMBOL=BTC-USD
 MAKER_POINTS_ORDER_AMOUNT=0.01
 MAKER_POINTS_CLOSE_THRESHOLD=0.1
