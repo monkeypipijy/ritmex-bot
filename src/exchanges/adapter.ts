@@ -47,6 +47,11 @@ export interface ExchangePrecision {
   minQuoteAmount?: number;
 }
 
+export type ConnectionEventType = "disconnected" | "reconnected";
+export interface ConnectionEventListener {
+  (event: ConnectionEventType, symbol: string): void;
+}
+
 export interface ExchangeAdapter {
   readonly id: string;
   supportsTrailingStops(): boolean;
@@ -61,4 +66,9 @@ export interface ExchangeAdapter {
   cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void>;
   cancelAllOrders(params: { symbol: string }): Promise<void>;
   getPrecision?(): Promise<ExchangePrecision | null>;
+  // 连接保护相关方法（可选，仅 StandX 支持）
+  onConnectionEvent?(listener: ConnectionEventListener): void;
+  offConnectionEvent?(listener: ConnectionEventListener): void;
+  queryOpenOrders?(): Promise<AsterOrder[]>;
+  forceCancelAllOrders?(): Promise<boolean>;
 }

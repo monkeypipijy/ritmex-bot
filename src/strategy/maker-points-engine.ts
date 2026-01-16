@@ -1,5 +1,5 @@
 import type { MakerPointsConfig } from "../config";
-import type { ExchangeAdapter } from "../exchanges/adapter";
+import type { ExchangeAdapter, ConnectionEventType } from "../exchanges/adapter";
 import type {
   AsterAccountSnapshot,
   AsterDepth,
@@ -149,6 +149,12 @@ export class MakerPointsEngine {
   private lastPositionAmt = 0;
   private lastPositionSide: "LONG" | "SHORT" | "FLAT" = "FLAT";
 
+  // 连接保护相关状态
+  private connectionState: "connected" | "disconnected" = "connected";
+  private reconnectResetPending = false;
+  private lastRepriceQueryTime = 0;
+  private readonly repriceQueryIntervalMs = 3000; // 最小查询间隔
+
   constructor(private readonly config: MakerPointsConfig, private readonly exchange: ExchangeAdapter) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
     this.rateLimit = new RateLimitController(this.config.refreshIntervalMs, (type, detail) =>
@@ -290,6 +296,101 @@ export class MakerPointsEngine {
         processFail: (error) => t("log.process.tickerError", { error: String(error) }),
       }
     );
+
+    // 注册连接事件监听（如果交易所支持）
+    this.setupConnectionProtection();
+  }
+
+  /**
+   * 设置连接保护机制
+   * 监听断连/重连事件，实现保护逻辑
+   */
+  private setupConnectionProtection(): void {
+    if (!this.exchange.onConnectionEvent) return;
+
+    this.exchange.onConnectionEvent((event, symbol) => {
+      if (event === "disconnected") {
+        this.handleDisconnect(symbol);
+      } else if (event === "reconnected") {
+        this.handleReconnect(symbol);
+      }
+    });
+  }
+
+  /**
+   * 处理断连事件
+   */
+  private handleDisconnect(symbol: string): void {
+    this.connectionState = "disconnected";
+    this.tradeLog.push("warn", `WebSocket 断连 (${symbol})，启动断连保护`);
+    this.notify({
+      type: "token_expired",
+      level: "warn",
+      symbol: this.config.symbol,
+      title: "连接断开",
+      message: "WebSocket 断连，正在尝试取消所有挂单",
+      details: { symbol },
+    });
+  }
+
+  /**
+   * 处理重连事件
+   * 重连后需要重新查询挂单并取消所有挂单
+   */
+  private async handleReconnect(symbol: string): Promise<void> {
+    this.connectionState = "connected";
+    this.reconnectResetPending = true;
+    this.tradeLog.push("info", `WebSocket 重连成功 (${symbol})，开始重连保护流程`);
+
+    try {
+      // 查询真实挂单状态
+      if (this.exchange.queryOpenOrders) {
+        const realOrders = await this.exchange.queryOpenOrders();
+        this.tradeLog.push("info", `重连后查询到 ${realOrders.length} 个挂单`);
+
+        if (realOrders.length > 0) {
+          // 取消所有挂单
+          if (this.exchange.forceCancelAllOrders) {
+            const success = await this.exchange.forceCancelAllOrders();
+            if (success) {
+              this.tradeLog.push("order", "重连保护：已取消所有挂单");
+            } else {
+              this.tradeLog.push("warn", "重连保护：取消挂单未完全成功，将在下次循环重试");
+            }
+          } else {
+            await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
+            this.tradeLog.push("order", "重连保护：已取消所有挂单");
+          }
+        }
+      }
+
+      // 重置本地挂单状态
+      this.openOrders = [];
+      this.pendingCancelOrders.clear();
+      unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
+
+      // 重置 reprice 基准，强制下一次重新计算
+      this.lastQuoteBid1 = null;
+      this.lastQuoteAsk1 = null;
+      this.desiredOrders = [];
+      this.lastDesiredSummary = null;
+
+      // 标记启动重置需要重新执行
+      this.initialOrderResetDone = false;
+
+      this.notify({
+        type: "position_opened",
+        level: "info",
+        symbol: this.config.symbol,
+        title: "重连完成",
+        message: "WebSocket 重连成功，已清理挂单状态",
+        details: { symbol },
+      });
+    } catch (error) {
+      this.tradeLog.push("error", `重连保护流程失败: ${extractMessage(error)}`);
+    } finally {
+      this.reconnectResetPending = false;
+    }
   }
 
   private syncLocksWithOrders(orders: AsterOrder[] | null | undefined): void {
@@ -553,7 +654,14 @@ export class MakerPointsEngine {
     }
   }
 
-  private async syncOrders(targets: DesiredOrder[], closeOnly: boolean): Promise<void> {
+  private async syncOrders(targets: DesiredOrder[], _closeOnly: boolean): Promise<void> {
+    // 价格变化保护：如果需要 reprice 且距上次查询已过足够时间，先查询真实挂单
+    const shouldVerifyOrders = await this.verifyOrdersIfNeeded();
+    if (shouldVerifyOrders) {
+      // 如果发现有未预期的挂单，先取消所有挂单
+      return;
+    }
+
     const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
     const openOrders = availableOrders.filter((order) => isOrderActiveStatus(order.status));
     const { toCancel, toPlace } = makeOrderPlan(openOrders, targets);
@@ -627,6 +735,75 @@ export class MakerPointsEngine {
         );
       }
     }
+  }
+
+  /**
+   * 验证真实挂单状态，防止取消请求丢失
+   * 在每次 reprice 时查询真实挂单，发现未预期的挂单时取消所有挂单
+   * @returns true 表示发现问题并执行了取消操作，调用方应跳过本轮挂单
+   */
+  private async verifyOrdersIfNeeded(): Promise<boolean> {
+    // 如果交易所不支持查询挂单，跳过验证
+    if (!this.exchange.queryOpenOrders) return false;
+
+    // 限制查询频率
+    const now = Date.now();
+    if (now - this.lastRepriceQueryTime < this.repriceQueryIntervalMs) {
+      return false;
+    }
+
+    try {
+      const realOrders = await this.exchange.queryOpenOrders();
+      this.lastRepriceQueryTime = now;
+
+      // 比较真实挂单与本地记录
+      const realOrderIds = new Set(realOrders.map((o) => String(o.orderId)));
+      const localOrderIds = new Set(this.openOrders.map((o) => String(o.orderId)));
+
+      // 查找本地以为已取消但实际还存在的订单
+      const unexpectedOrders = realOrders.filter((order) => {
+        const orderId = String(order.orderId);
+        // 如果本地没有这个订单，说明我们以为它已经被取消了
+        if (!localOrderIds.has(orderId)) {
+          return true;
+        }
+        // 如果本地记录这个订单在等待取消，但实际还存在
+        if (this.pendingCancelOrders.has(orderId)) {
+          return true;
+        }
+        return false;
+      });
+
+      if (unexpectedOrders.length > 0) {
+        this.tradeLog.push(
+          "warn",
+          `发现 ${unexpectedOrders.length} 个未预期挂单，执行强制取消`
+        );
+
+        // 强制取消所有挂单
+        if (this.exchange.forceCancelAllOrders) {
+          await this.exchange.forceCancelAllOrders();
+        } else {
+          await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
+        }
+
+        // 重置本地状态
+        this.openOrders = [];
+        this.pendingCancelOrders.clear();
+        this.tradeLog.push("order", "已强制取消所有挂单，重置本地状态");
+        return true;
+      }
+
+      // 更新本地挂单状态以匹配真实状态
+      if (realOrders.length !== this.openOrders.length) {
+        // 移除本地记录中不存在于服务器的订单
+        this.openOrders = this.openOrders.filter((o) => realOrderIds.has(String(o.orderId)));
+      }
+    } catch (error) {
+      this.tradeLog.push("error", `验证挂单状态失败: ${extractMessage(error)}`);
+    }
+
+    return false;
   }
 
   private async checkStopLoss(): Promise<void> {

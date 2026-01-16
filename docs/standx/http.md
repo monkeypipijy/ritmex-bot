@@ -679,6 +679,8 @@ To receive order updates via [Order Response Stream](https://docs.standx.com/sta
 
 `GET /api/query_depth_book`
 
+**⚠️ Note: The sequence of price levels in the asks and bids arrays is not guaranteed. Please implement local sorting on the client side based on your specific requirements.**
+
 **Required Parameters**
 
 | Parameter | Type | Description |
@@ -791,7 +793,7 @@ To receive order updates via [Order Response Stream](https://docs.standx.com/sta
 
 | Parameter | Type | Description |
 | --- | --- | --- |
-| countBack | u64 | The required amount of bars to load |
+| countback | u64 | The required amount of bars to load |
 
 **Response Example**:
 
@@ -840,4 +842,4 @@ For enums, constants, and error codes, see [API Reference](https://docs.standx.c
 
 Last updated on
 
-[Perps Auth](https://docs.standx.com/standx-api/perps-auth "Perps Auth") [Perps WebSocket API](https://docs.standx.com/standx-api/perps-ws "Perps WebSocket API")
+[Perps Auth SVM Example](https://docs.standx.com/standx-api/perps-auth-svm-example "Perps Auth SVM Example") [Perps WebSocket API](https://docs.standx.com/standx-api/perps-ws "Perps WebSocket API")

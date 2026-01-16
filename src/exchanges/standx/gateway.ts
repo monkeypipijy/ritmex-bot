@@ -80,6 +80,9 @@ export interface StandxGatewayOptions {
   logger?: (context: string, error: unknown) => void;
 }
 
+export type ConnectionEventType = "disconnected" | "reconnected";
+export type ConnectionEventListener = (event: ConnectionEventType, symbol: string) => void;
+
 class StandxRequestSigner {
   private readonly privateKey: Uint8Array | null;
 
@@ -396,6 +399,7 @@ export class StandxGateway {
   private readonly tickerListeners = new Map<string, Set<TickerListener>>();
   private readonly klineListeners = new Map<string, Set<KlineListener>>();
   private readonly fundingListeners = new Map<string, Set<FundingRateListener>>();
+  private readonly connectionListeners = new Set<ConnectionEventListener>();
 
   private readonly openOrders = new Map<string, AsterOrder>();
   private readonly positions = new Map<string, AsterAccountPosition>();
@@ -416,6 +420,12 @@ export class StandxGateway {
   private readonly fundingTimers = new Map<string, PollTimer>();
 
   private lastPriceBySymbol = new Map<string, number>();
+
+  // 断连保护相关
+  private disconnectCancelRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectCancelRetryActive = false;
+  private lastKnownOpenOrders: Array<{ orderId: string; clOrdId?: string }> = [];
+  private disconnectedSymbol: string | null = null;
 
   constructor(options: StandxGatewayOptions) {
     this.token = options.token ?? process.env.STANDX_TOKEN ?? "";
@@ -509,6 +519,54 @@ export class StandxGateway {
     }
     listeners.add(listener);
     this.startFundingPolling(key);
+  }
+
+  onConnectionEvent(listener: ConnectionEventListener): void {
+    this.connectionListeners.add(listener);
+  }
+
+  offConnectionEvent(listener: ConnectionEventListener): void {
+    this.connectionListeners.delete(listener);
+  }
+
+  /**
+   * 查询当前真实的挂单状态（通过 HTTP API）
+   * 用于在网络恢复后验证实际挂单情况
+   */
+  async queryOpenOrders(symbol: string): Promise<AsterOrder[]> {
+    const normalized = normalizeSymbol(symbol);
+    const ordersPayload = await this.requestJson<unknown>("/api/query_open_orders", {
+      method: "GET",
+      params: { symbol: normalized },
+    });
+    const orders = extractOrders(ordersPayload);
+    const result: AsterOrder[] = [];
+    for (const raw of orders) {
+      const order = this.mapOrder(raw);
+      result.push(order);
+    }
+    return result;
+  }
+
+  /**
+   * 强制取消所有挂单（用于断连保护）
+   * 会不断重试直到成功或确认没有挂单
+   */
+  async forceCancelAllOrders(symbol: string): Promise<boolean> {
+    const normalized = normalizeSymbol(symbol);
+    try {
+      const currentOrders = await this.queryOpenOrders(normalized);
+      if (currentOrders.length === 0) {
+        return true;
+      }
+      await this.cancelAllOrders({ symbol: normalized });
+      // 再次查询确认
+      const afterCancel = await this.queryOpenOrders(normalized);
+      return afterCancel.length === 0;
+    } catch (error) {
+      this.logger("forceCancelAllOrders", error);
+      return false;
+    }
   }
 
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
@@ -791,11 +849,16 @@ export class StandxGateway {
       this.sendAuthIfNeeded();
     };
     const handleClose = () => {
+      const wasReady = this.marketWsReady;
       this.marketWsReady = false;
       this.marketWsAuthed = false;
       this.marketWsAuthRequested = false;
       this.marketWs = null;
       this.logDebug("ws close");
+      // 触发断连事件，启动断连保护
+      if (wasReady) {
+        this.onDisconnect();
+      }
       this.scheduleReconnect();
     };
     const handleError = (error: unknown) => {
@@ -854,6 +917,8 @@ export class StandxGateway {
         this.marketWsAuthed = true;
         this.marketWsAuthRequested = false;
         this.flushSubscriptions();
+        // 触发重连事件
+        this.onReconnect();
       }
       return;
     }
@@ -1391,6 +1456,115 @@ export class StandxGateway {
       return JSON.parse(text) as T;
     } catch {
       return text as unknown as T;
+    }
+  }
+
+  /**
+   * 断连时触发，记录当前挂单状态并启动持久重试取消
+   */
+  private onDisconnect(): void {
+    // 记录最后已知的挂单状态
+    this.lastKnownOpenOrders = Array.from(this.openOrders.values()).map((order) => ({
+      orderId: String(order.orderId),
+      clOrdId: order.clientOrderId,
+    }));
+
+    // 获取当前订阅的 symbol
+    const symbols = new Set<string>();
+    for (const key of this.subscriptions) {
+      const [, symbol] = key.split(":");
+      if (symbol) symbols.add(symbol);
+    }
+    this.disconnectedSymbol = symbols.size > 0 ? Array.from(symbols)[0] ?? null : null;
+
+    this.logDebug("disconnect protection", {
+      openOrderCount: this.lastKnownOpenOrders.length,
+      symbol: this.disconnectedSymbol,
+    });
+
+    // 触发断连事件
+    for (const listener of this.connectionListeners) {
+      try {
+        listener("disconnected", this.disconnectedSymbol ?? "");
+      } catch (error) {
+        this.logger("connectionListener", error);
+      }
+    }
+
+    // 启动断连保护：持续重试取消所有挂单
+    if (this.lastKnownOpenOrders.length > 0 && this.disconnectedSymbol) {
+      this.startDisconnectCancelRetry(this.disconnectedSymbol);
+    }
+  }
+
+  /**
+   * 重连成功时触发，停止断连保护并通知监听器
+   */
+  private onReconnect(): void {
+    this.logDebug("reconnect protection", {
+      wasRetrying: this.disconnectCancelRetryActive,
+      symbol: this.disconnectedSymbol,
+    });
+
+    // 停止断连保护重试
+    this.stopDisconnectCancelRetry();
+
+    // 触发重连事件
+    for (const listener of this.connectionListeners) {
+      try {
+        listener("reconnected", this.disconnectedSymbol ?? "");
+      } catch (error) {
+        this.logger("connectionListener", error);
+      }
+    }
+
+    this.disconnectedSymbol = null;
+    this.lastKnownOpenOrders = [];
+  }
+
+  /**
+   * 启动断连保护：持续重试取消所有挂单
+   * 即使网络不通也不停止重试
+   */
+  private startDisconnectCancelRetry(symbol: string): void {
+    if (this.disconnectCancelRetryActive) return;
+    this.disconnectCancelRetryActive = true;
+
+    const retryCancel = async () => {
+      if (!this.disconnectCancelRetryActive) return;
+
+      this.logDebug("disconnect cancel retry attempt", { symbol });
+
+      try {
+        const success = await this.forceCancelAllOrders(symbol);
+        if (success) {
+          this.logDebug("disconnect cancel retry success");
+          this.stopDisconnectCancelRetry();
+          return;
+        }
+      } catch (error) {
+        this.logger("disconnectCancelRetry", error);
+      }
+
+      // 如果仍在重试状态，继续下一次重试
+      if (this.disconnectCancelRetryActive) {
+        this.disconnectCancelRetryTimer = setTimeout(() => {
+          void retryCancel();
+        }, 2000); // 每 2 秒重试一次
+      }
+    };
+
+    void retryCancel();
+  }
+
+  /**
+   * 停止断连保护重试
+   */
+  private stopDisconnectCancelRetry(): void {
+    this.disconnectCancelRetryActive = false;
+    if (this.disconnectCancelRetryTimer) {
+      clearTimeout(this.disconnectCancelRetryTimer);
+      this.disconnectCancelRetryTimer = null;
     }
   }
 }

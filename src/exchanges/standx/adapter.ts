@@ -11,7 +11,9 @@ import type {
 } from "../adapter";
 import type { AsterOrder, CreateOrderParams } from "../types";
 import { extractMessage } from "../../utils/errors";
-import { StandxGateway, type StandxGatewayOptions } from "./gateway";
+import { StandxGateway, type StandxGatewayOptions, type ConnectionEventListener, type ConnectionEventType } from "./gateway";
+
+export type { ConnectionEventListener, ConnectionEventType };
 
 export interface StandxCredentials {
   token?: string;
@@ -120,6 +122,38 @@ export class StandxExchangeAdapter implements ExchangeAdapter {
       console.error("[StandxExchangeAdapter] getPrecision failed", error);
       return null;
     }
+  }
+
+  /**
+   * 监听连接事件（断连/重连）
+   */
+  onConnectionEvent(listener: ConnectionEventListener): void {
+    this.gateway.onConnectionEvent(listener);
+  }
+
+  /**
+   * 取消连接事件监听
+   */
+  offConnectionEvent(listener: ConnectionEventListener): void {
+    this.gateway.offConnectionEvent(listener);
+  }
+
+  /**
+   * 查询当前真实的挂单状态（通过 HTTP API）
+   * 用于验证实际挂单情况，防止取消请求丢失
+   */
+  async queryOpenOrders(): Promise<AsterOrder[]> {
+    await this.ensureInitialized("queryOpenOrders");
+    return this.gateway.queryOpenOrders(this.symbol);
+  }
+
+  /**
+   * 强制取消所有挂单
+   * 会查询当前挂单然后取消，并验证取消成功
+   */
+  async forceCancelAllOrders(): Promise<boolean> {
+    await this.ensureInitialized("forceCancelAllOrders");
+    return this.gateway.forceCancelAllOrders(this.symbol);
   }
 
   private safeInvoke<T extends (...args: any[]) => void>(context: string, cb: T): T {

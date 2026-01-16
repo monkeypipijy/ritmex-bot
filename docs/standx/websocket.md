@@ -8,6 +8,12 @@ The WebSocket API provides two streams: **Market Stream** for market data and us
 
 Both WebSocket streams implement the following connection management behavior:
 
+### Connection Duration Limit
+
+- **Maximum Duration**: A single WebSocket connection can be maintained for a maximum of **24 hours**
+- After 24 hours, the connection will be automatically terminated
+- Clients should implement reconnection logic to handle this gracefully
+
 ### Ping/Pong Mechanism
 
 - **Server Ping Interval**: The server sends a WebSocket Ping frame every 10 seconds
@@ -45,6 +51,7 @@ Base Endpoint: `wss://perps.standx.com/ws-stream/v1`
   // public channels
   { channel: "price", symbol: "<symbol>" },
   { channel: "depth_book", symbol: "<symbol>" },
+  { channel: "public_trade", symbol: "<symbol>" },
   // user-level authenticated channels
   { channel: "order" },
   { channel: "position" },
@@ -54,6 +61,8 @@ Base Endpoint: `wss://perps.standx.com/ws-stream/v1`
 ```
 
 ### Subscribe to Depth Book
+
+**⚠️ Note: The sequence of price levels in the asks and bids arrays is not guaranteed. Please implement local sorting on the client side based on your specific requirements.**
 
 - Request:
 - Response:
