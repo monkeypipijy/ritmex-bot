@@ -635,18 +635,23 @@ export class LiquidityMakerEngine {
 
     let targetPrice: number;
 
-    // 基于最近成交或orderbook计算目标价
+    // 基于最近成交或入场价计算目标价，应用 closeTickOffset
     if (this.lastFill && Date.now() - this.lastFill.timestamp < 60000) {
       // 最近1分钟内有成交，基于成交价计算
       if (closeSide === "SELL") {
-        // 多头平仓：在成交价上方挂卖单
         targetPrice = this.lastFill.price + tickOffset;
       } else {
-        // 空头平仓：在成交价下方挂买单
         targetPrice = this.lastFill.price - tickOffset;
       }
+    } else if (entryPrice && Number.isFinite(entryPrice) && entryPrice > 0) {
+      // 没有最近成交但有入场价，基于入场价计算
+      if (closeSide === "SELL") {
+        targetPrice = entryPrice + tickOffset;
+      } else {
+        targetPrice = entryPrice - tickOffset;
+      }
     } else {
-      // 没有最近成交，使用orderbook价格
+      // 没有成交也没有入场价，使用orderbook价格
       if (closeSide === "SELL") {
         targetPrice = topAsk;
       } else {
@@ -654,18 +659,18 @@ export class LiquidityMakerEngine {
       }
     }
 
-    // 确保不亏本
+    // 确保不亏本（仅当目标价低于入场价时调整）
     if (entryPrice && Number.isFinite(entryPrice) && entryPrice > 0) {
       if (closeSide === "SELL") {
         // 多头平仓：卖价必须 >= 入场价
         if (targetPrice < entryPrice) {
-          targetPrice = entryPrice + this.priceTick; // 至少盈利1个tick
+          targetPrice = entryPrice + this.priceTick;
           this.tradeLog.push("info", `平仓价调整为入场价+1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
         }
       } else {
         // 空头平仓：买价必须 <= 入场价
         if (targetPrice > entryPrice) {
-          targetPrice = entryPrice - this.priceTick; // 至少盈利1个tick
+          targetPrice = entryPrice - this.priceTick;
           this.tradeLog.push("info", `平仓价调整为入场价-1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
         }
       }
