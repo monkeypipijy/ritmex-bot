@@ -157,6 +157,8 @@ export interface MakerConfig {
   maxLogEntries: number;
   maxCloseSlippagePct: number;
   priceTick: number;
+  /** 开仓挂单档位：1=买1/卖1，2=买2/卖2，以此类推。仅影响无仓位时的开仓挂单，平仓逻辑不受影响。默认1 */
+  entryDepthLevel: number;
 }
 
 export const makerConfig: MakerConfig = {
@@ -172,6 +174,7 @@ export const makerConfig: MakerConfig = {
     0.05
   ),
   priceTick: parseNumber(process.env.MAKER_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
+  entryDepthLevel: Math.max(1, Math.floor(parseNumber(process.env.MAKER_ENTRY_DEPTH_LEVEL, 1))),
 };
 
 export interface MakerPointsConfig {
@@ -347,6 +350,8 @@ export interface LiquidityMakerConfig {
   closeTickOffset: number;
   /** 偏移判断阈值倍数，当一侧深度超出另一侧此倍数时取消薄端订单，默认2 */
   depthImbalanceRatio: number;
+  /** 开仓挂单档位：1=买1/卖1，2=买2/卖2，以此类推。仅影响无仓位时的开仓挂单，平仓逻辑不受影响。默认1 */
+  entryDepthLevel: number;
 }
 
 export const liquidityMakerConfig: LiquidityMakerConfig = {
@@ -364,6 +369,7 @@ export const liquidityMakerConfig: LiquidityMakerConfig = {
   priceTick: parseNumber(process.env.LIQUIDITY_MAKER_PRICE_TICK ?? process.env.MAKER_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
   closeTickOffset: Math.max(1, Math.floor(parseNumber(process.env.LIQUIDITY_MAKER_CLOSE_TICK_OFFSET, 1))),
   depthImbalanceRatio: Math.max(1.1, parseNumber(process.env.LIQUIDITY_MAKER_DEPTH_IMBALANCE_RATIO, 2)),
+  entryDepthLevel: Math.max(1, Math.floor(parseNumber(process.env.MAKER_ENTRY_DEPTH_LEVEL, 1))),
 };
 
 export function isBasisStrategyEnabled(): boolean {

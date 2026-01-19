@@ -14,7 +14,7 @@ import { isOrderActiveStatus } from "../utils/order-status";
 import { getPosition } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
-import { getTopPrices, getMidOrLast } from "../utils/price";
+import { getTopPrices, getPricesAtLevel, getMidOrLast } from "../utils/price";
 import { shouldStopLoss } from "../utils/risk";
 import {
   marketClose,
@@ -305,10 +305,18 @@ export class MakerEngine {
 
       // 直接使用orderbook价格，格式化为字符串避免精度问题
       const priceDecimals = this.getPriceDecimals();
+      // 平仓价格始终使用买1/卖1
       const closeBidPrice = formatPriceToString(topBid, priceDecimals);
       const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
-      const bidPrice = formatPriceToString(topBid - this.config.bidOffset, priceDecimals);
-      const askPrice = formatPriceToString(topAsk + this.config.askOffset, priceDecimals);
+
+      // 开仓价格根据 entryDepthLevel 使用指定档位
+      const entryLevel = this.config.entryDepthLevel ?? 1;
+      const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(depth, entryLevel);
+      const entryBidBase = entryBid ?? topBid;
+      const entryAskBase = entryAsk ?? topAsk;
+
+      const bidPrice = formatPriceToString(entryBidBase - this.config.bidOffset, priceDecimals);
+      const askPrice = formatPriceToString(entryAskBase + this.config.askOffset, priceDecimals);
       const position = getPosition(this.accountSnapshot, this.config.symbol);
       const absPosition = Math.abs(position.positionAmt);
       const desired: DesiredOrder[] = [];

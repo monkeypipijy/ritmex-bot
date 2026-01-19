@@ -14,7 +14,7 @@ import { isOrderActiveStatus } from "../utils/order-status";
 import { getPosition, parseSymbolParts } from "../utils/strategy";
 import type { PositionSnapshot } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
-import { getTopPrices, getMidOrLast } from "../utils/price";
+import { getTopPrices, getPricesAtLevel, getMidOrLast } from "../utils/price";
 import { shouldStopLoss } from "../utils/risk";
 import {
   marketClose,
@@ -430,10 +430,18 @@ export class LiquidityMakerEngine {
 
       // 直接使用orderbook价格，格式化为字符串避免精度问题
       const priceDecimals = this.getPriceDecimals();
+      // 平仓价格始终使用买1/卖1
       const closeBidPrice = formatPriceToString(finalBid, priceDecimals);
       const closeAskPrice = formatPriceToString(finalAsk, priceDecimals);
-      const rawBidPrice = finalBid - this.config.bidOffset;
-      const rawAskPrice = finalAsk + this.config.askOffset;
+
+      // 开仓价格根据 entryDepthLevel 使用指定档位
+      const entryLevel = this.config.entryDepthLevel ?? 1;
+      const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(latestDepth, entryLevel);
+      const entryBidBase = entryBid ?? finalBid;
+      const entryAskBase = entryAsk ?? finalAsk;
+
+      const rawBidPrice = entryBidBase - this.config.bidOffset;
+      const rawAskPrice = entryAskBase + this.config.askOffset;
       const safeBid = this.ensureMakerPrice("BUY", rawBidPrice, finalBid, finalAsk);
       const safeAsk = this.ensureMakerPrice("SELL", rawAskPrice, finalBid, finalAsk);
       const bidPrice = safeBid != null ? formatPriceToString(safeBid, priceDecimals) : null;
